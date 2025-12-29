@@ -28,7 +28,7 @@ def init_flagship_ui():
     
     st.markdown(f"""
         <style>
-            /* 🌌 全環境底色強制鎖死 */
+            /* 🌌 全環境底色強制鎖死 (防止 iOS Safari 變白) */
             html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stToolbar"] {{
                 background-color: #000000 !important;
                 color: #FFFFFF !important;
@@ -99,7 +99,7 @@ def init_flagship_ui():
             [data-testid="stTable"] td {{ color: #FFFFFF !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000; padding: 15px !important; }}
             [data-testid="stTable"] th {{ color: #FFD700 !important; background-color: #262626 !important; padding: 12px !important; }}
 
-            /* 🏅 月榜三甲特效 */
+            /* 🏅 月榜金銀銅三甲特效 */
             .gold-medal {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000 !important; padding: 18px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 20px rgba(255,215,0,0.8); border: 2px solid #FFF; }}
             .silver-medal {{ background: linear-gradient(45deg, #C0C0C0, #E8E8E8); color: #000 !important; padding: 16px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 15px rgba(192,192,192,0.6); border: 2px solid #FFF; }}
             .bronze-medal {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF !important; padding: 14px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 12px rgba(205,127,50,0.5); border: 2px solid #FFF; }}
@@ -342,7 +342,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                             conn_c.commit(); st.success("精算完成")
                         conn_c.close()
 
-                elif label == "📦 物資": # --- 【核心修復：欄位精確對位區】 ---
+                elif label == "📦 物資":
                     with st.form("ni_form"):
                         nn = st.text_input("物資名")
                         nv = st.number_input("價值", 0)
@@ -351,14 +351,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                         nmx = st.number_input("XP 資格門檻", 0)
                         img_url = st.text_input("圖片網址")
                         if st.form_submit_button("🔨 執行物理上架"):
-                            # 修復 OperationalError：明確指名欄位名稱，確保 100% 對位
-                            conn.execute("""
-                                INSERT OR REPLACE INTO Inventory 
-                                (item_name, stock, item_value, weight, img_url, min_xp) 
-                                VALUES (?, ?, ?, ?, ?, ?)
-                            """, (nn, ns, nv, nw, img_url, nmx))
+                            conn.execute("INSERT OR REPLACE INTO Inventory (item_name, stock, item_value, weight, img_url, min_xp) VALUES (?, ?, ?, ?, ?, ?)", (nn, ns, nv, nw, img_url, nmx))
                             conn.commit(); st.success("上架成功！"); st.rerun()
-                    
                     st.write("---")
                     mdf = pd.read_sql_query("SELECT * FROM Inventory", conn)
                     for _, ri in mdf.iterrows():
@@ -368,11 +362,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                             nurl = st.text_input("連結", ri['img_url'], key=f"u_{ri['item_name']}")
                             nx = st.number_input("門檻", int(ri['min_xp']), key=f"m_{ri['item_name']}")
                             if st.button("💾 更新", key=f"s_{ri['item_name']}"): 
-                                conn.execute("""
-                                    UPDATE Inventory 
-                                    SET stock = stock + ?, weight = ?, img_url = ?, min_xp = ? 
-                                    WHERE item_name = ?
-                                """, (eq, ew, nurl, nx, ri['item_name']))
+                                conn.execute("UPDATE Inventory SET stock = stock + ?, weight = ?, img_url = ?, min_xp = ? WHERE item_name = ?", (eq, ew, nurl, nx, ri['item_name']))
                                 conn.commit(); st.rerun()
 
                 elif label == "🚀 空投":
@@ -380,9 +370,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     if st.button("🚀 執行空投"): conn.execute("UPDATE Members SET xp_temp = xp_temp + ? WHERE pf_id = ?", (val, tid)) if tid else conn.execute("UPDATE Members SET xp_temp = xp_temp + ?", (val,)); conn.commit(); st.success("成功")
 
                 elif label == "📢 視覺":
-                    ns_v = st.slider("速度", 5, 60, 35); ic_v = st.text_input("邀請碼", "888")
-                    txt_v = st.text_area("公告內容"); bg_v = st.text_input("背景 URL")
-                    if st.button("💾 保存設定"):
+                    ns_v = st.slider("速度", 5, 60, 35); ic_v = st.text_input("邀請碼", "888"); txt_v = st.text_area("公告"); bg_v = st.text_input("背景 URL")
+                    if st.button("💾 保存"):
                         conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (str(ns_v), ic_v, txt_v))
                         if bg_v: conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('welcome_bg_url',?)", (bg_v,))
                         conn.commit(); st.rerun()
@@ -400,7 +389,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     if st.button("🔥 粉碎月榜"): conn.execute("DELETE FROM Monthly_God"); conn.commit(); st.rerun()
                     if st.button("💀 粉碎總榜"): conn.execute("DELETE FROM Leaderboard WHERE player_id != '330999'"); conn.commit(); st.rerun()
 
-                elif label == "📜 核銷":
+                elif label == "📜 核銷": # --- 【物理修正核心】：禮物卡點數寫入永久 XP ---
                     sid_v = st.number_input("輸入序號 ID", value=0, step=1)
                     if st.button("🔥 核銷銷帳", type="primary"):
                         p_chk = conn.execute("SELECT player_id, prize_name, status FROM Prizes WHERE id=?", (sid_v,)).fetchone()
@@ -412,8 +401,13 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                                 xp_m = re.search(r'(\d+)\s*(XP|點XP)', prize_name, re.IGNORECASE)
                                 conn.execute("UPDATE Prizes SET status='已核銷' WHERE id=?", (sid_v,))
                                 conn.execute("INSERT INTO Staff_Logs (staff_id, player_id, prize_name, time) VALUES (?,?,?,?)", (st.session_state.player_id, player_id, prize_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                                if xp_m: conn.execute("UPDATE Members SET xp_temp = xp_temp + ? WHERE pf_id = ?", (int(xp_m.group(1)), player_id))
-                                conn.commit(); st.success(f"✅ 核銷完成！"); time.sleep(1); st.rerun()
+                                auto_msg = ""
+                                if xp_m:
+                                    xv = int(xp_m.group(1))
+                                    # 物理修正：由 xp_temp (紅利) 修正為 xp (永久)
+                                    conn.execute("UPDATE Members SET xp = xp + ? WHERE pf_id = ?", (xv, player_id))
+                                    auto_msg = f" 並且物理空投 {xv} 永久 XP 入帳！"
+                                conn.commit(); st.success(f"✅ 核銷完成！{auto_msg}"); time.sleep(1); st.rerun()
                             else: st.error("❌ 權限不足！")
                     ldf_v = pd.read_sql_query("SELECT id, staff_id, player_id, prize_name, time FROM Staff_Logs ORDER BY id DESC LIMIT 15", conn)
                     for _, rv in ldf_v.iterrows():
@@ -424,7 +418,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                         with open('poker_data.db', 'rb') as f: st.download_button("📥 下載物理 DB", f, "Backup.db")
                     if user_role == "老闆":
                         rf = st.file_uploader("數據還原", type="db")
-                        if rf and st.button("🚨 強制物理還原"):
+                        if rf and st.button("🚨 強制還原"):
                             with open('poker_data.db', 'wb') as f: f.write(rf.getbuffer())
                             st.success("成功"); st.rerun()
 
