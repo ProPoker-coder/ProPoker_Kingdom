@@ -27,12 +27,39 @@ def init_flagship_ui():
             /* 🏰 歡迎牆美工鎖死 */
             .welcome-wall {{ 
                 text-align: center; padding: 60px 20px; 
-                background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), url('{m_bg}'); 
+                background: linear-gradient(rgba(0,0,0,0.85), rgba(0,0,0,0.85)), url('{m_bg}'); 
                 background-size: cover; background-position: center; border-radius: 30px; border: 2px solid #FFD700; margin-top: 20px; 
             }}
             .welcome-title {{ font-size: clamp(2.5em, 8vw, 5em); color: #FFD700; font-weight: 900; text-shadow: 0 0 30px rgba(255,215,0,0.6); }}
             .welcome-subtitle {{ color: #FFFFFF; font-size: 1.5em; letter-spacing: 5px; margin-bottom: 30px; }}
-            .feature-box {{ background: rgba(255,215,0,0.1); padding: 20px; border-radius: 15px; margin: 10px auto; border: 1px solid #FFD700; max-width: 600px; text-align: left; }}
+            
+            /* 📱 iPhone 視覺強化 */
+            .feature-box {{ 
+                background: rgba(0,0,0,0.7); 
+                padding: 22px; 
+                border-radius: 15px; 
+                margin: 15px auto; 
+                border: 1px solid #FFD700; 
+                max-width: 600px; 
+                text-align: left;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            }}
+            .feature-title {{ 
+                color: #FFD700 !important; 
+                font-size: 1.3em !important; 
+                font-weight: 900 !important; 
+                text-shadow: 1px 1px 2px #000;
+                margin-bottom: 5px;
+                display: block;
+            }}
+            .feature-desc {{ 
+                color: #FFFFFF !important; 
+                font-size: 1.1em !important; 
+                font-weight: 500 !important;
+                line-height: 1.4;
+                text-shadow: 1px 1px 2px #000;
+                display: block;
+            }}
             
             /* 會員卡與 XP 數據卡美工焊死 */
             .rank-card {{ 
@@ -115,10 +142,19 @@ if not st.session_state.player_id:
         <div class="welcome-wall">
             <div class="welcome-title">PRO POKER</div>
             <div class="welcome-subtitle">撲 洛 傳 奇 殿 堂</div>
-            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🧧 領主認證通道</b><br>輸入 POKERFANS ID 通過邀請碼驗證即可加入王國領地。</div>
-            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🎰 幸運轉盤抽抽樂</b><br>打牌賺XP簽到領紅利 大獎爆不完</div>
-            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🛡️ 菁英榜單</b><br>尊榮排行彰顯不凡身價 提升段位可增加抽獎幸運值</div>
-            <p style="margin-top:40px; color:#AAA;">請在側邊欄登入以啟動殿堂功能</p>
+            <div class="feature-box">
+                <span class="feature-title">🧧 領主認證通道</span>
+                <span class="feature-desc">輸入 POKERFANS ID 通過邀請碼驗證即可加入王國領地。</span>
+            </div>
+            <div class="feature-box">
+                <span class="feature-title">🎰 幸運轉盤抽抽樂</span>
+                <span class="feature-desc">打牌賺XP簽到領紅利 大獎爆不完</span>
+            </div>
+            <div class="feature-box">
+                <span class="feature-title">🛡️ 菁英榜單</span>
+                <span class="feature-desc">尊榮排行彰顯不凡身價 提升段位可增加抽獎幸運值</span>
+            </div>
+            <p style="margin-top:40px; color:#FFFFFF; font-weight:bold; text-shadow:1px 1px 2px #000;">請在側邊欄登入以啟動殿堂功能</p>
         </div>
     """, unsafe_allow_html=True); st.stop()
 
@@ -214,7 +250,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
     st.write("---"); st.header("⚙️ 王國指揮部")
     mt = st.tabs(["📁 精算", "📦 物資", "🚀 空投", "📢 視覺", "🎯 任命", "🗑️ 結算", "📜 核銷", "💾 備份"])
 
-    with mt[0]: # 📁 精算分頁 (職權物理擴張至店長)
+    with mt[0]:
         up = st.file_uploader("上傳報表 (CSV)", type="csv")
         if up and st.button("🚀 執行精算"):
             df_c = pd.read_csv(up); df_c.columns = df_c.columns.str.strip(); conn_c = sqlite3.connect('poker_data.db')
@@ -237,19 +273,24 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 conn_c.commit(); st.success("精算對位完成")
             conn_c.close()
 
-    with mt[1]: # 📦 物資
+    with mt[1]: # --- 【物理對位修正區：XP 資格門檻】 ---
         with st.form("ni"):
-            nn, nv, ns, nw, n_mx = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0), st.number_input("門檻", 0)
+            nn, nv, ns, nw = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0)
+            n_mx = st.number_input("XP 抽獎資格門檻", 0)
             img_url_input = st.text_input("圖片網路連結 (http/https)")
             if st.form_submit_button("🔨 執行物理上架"):
-                conn.execute("INSERT OR REPLACE INTO Inventory VALUES (?,?,?,?,?,?)", (nn, ns, nv, nw, img_url_input, n_mx)); conn.commit(); st.rerun()
+                # 7 欄位對位：item_name, stock, item_value, weight, img_url, min_xp
+                conn.execute("INSERT OR REPLACE INTO Inventory (item_name, stock, item_value, weight, img_url, min_xp) VALUES (?,?,?,?,?,?)", (nn, ns, nv, nw, img_url_input, n_mx))
+                conn.commit(); st.success("上架成功！"); st.rerun()
         st.write("---"); mdf = pd.read_sql_query("SELECT * FROM Inventory", conn)
         for _, ri in mdf.iterrows():
             with st.expander(f"📦 管理：{ri['item_name']}"):
                 eq, ew = st.number_input("補貨", 0, key=f"q_{ri['item_name']}"), st.number_input("權重", value=ri['weight'], key=f"w_{ri['item_name']}")
                 new_url = st.text_input("更新圖片連結", value=ri['img_url'], key=f"url_{ri['item_name']}")
+                new_min_xp = st.number_input("更新 XP 資格門檻", value=int(ri['min_xp']), key=f"mx_{ri['item_name']}")
                 if st.button("💾 更新", key=f"u_{ri['item_name']}"): 
-                    conn.execute("UPDATE Inventory SET stock=stock+?, weight=?, img_url=? WHERE item_name=?", (eq, ew, new_url, ri['item_name'])); conn.commit(); st.rerun()
+                    conn.execute("UPDATE Inventory SET stock=stock+?, weight=?, img_url=?, min_xp=? WHERE item_name=?", (eq, ew, new_url, new_min_xp, ri['item_name']))
+                    conn.commit(); st.success("更新成功"); st.rerun()
                 if st.button("🗑️ 下架", key=f"d_{ri['item_name']}"): conn.execute("DELETE FROM Inventory WHERE item_name=?", (ri['item_name'],)); conn.commit(); st.rerun()
 
     with mt[2]: # 🚀 空投
@@ -305,13 +346,12 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 if st.session_state.access_level == "老闆" and st.button("🗑️", key=f"ld_{rv['id']}"):
                     conn.execute("DELETE FROM Staff_Logs WHERE id=?", (rv['id'],)); conn.commit(); st.rerun()
 
-    with mt[7]: # 💾 備份 (職權物理擴張至店長)
+    with mt[7]: # 💾 備份 (店長權限解放)
         if os.path.exists('poker_data.db'):
             with open('poker_data.db', 'rb') as f: st.download_button("📥 下載物理 DB", f, "Backup.db")
         
-        # 數據還原維持老闆權限，避免重大誤觸
         if st.session_state.access_level == "老闆":
-            rf = st.file_uploader("數據還原 (需上傳 .db 檔)", type="db")
+            rf = st.file_uploader("數據還原", type="db")
             if rf and st.button("🚨 強制物理還原"):
                 with open('poker_data.db', 'wb') as f: f.write(rf.getbuffer())
                 st.success("數據已物理還原！"); time.sleep(1); st.rerun()
