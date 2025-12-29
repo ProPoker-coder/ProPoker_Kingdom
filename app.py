@@ -9,8 +9,13 @@ import os
 import base64
 from datetime import datetime, timedelta
 
-# --- 0. 系統核心配置 ---
-st.set_page_config(page_title="PRO POKER 撲洛王國", page_icon="🃏", layout="wide")
+# --- 0. 系統核心配置 (Safari 穩定化優先) ---
+st.set_page_config(
+    page_title="PRO POKER 撲洛王國", 
+    page_icon="🃏", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # --- 1. 旗艦視覺系統物理焊接 (100% 全量展開) ---
 def init_flagship_ui():
@@ -23,48 +28,94 @@ def init_flagship_ui():
     
     st.markdown(f"""
         <style>
-            /* 🌌 iOS 全環境底色強制熔接 (防止 iOS 變白或閃爍) */
+            /* 🌌 全環境底色強制鎖死 (防止 iOS Safari 變白) */
             html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stToolbar"] {{
                 background-color: #000000 !important;
                 color: #FFFFFF !important;
             }}
             .main {{ background-color: #000000 !important; color: #FFFFFF !important; font-family: 'Arial Black', sans-serif; }}
+            
+            /* 🎯 左上角開啟側邊欄箭頭高亮強化 */
+            [data-testid="stSidebarCollapsedControl"] svg {{
+                fill: #00FF00 !important;
+                width: 45px !important;
+                height: 45px !important;
+                filter: drop-shadow(0px 0px 10px #00FF00);
+            }}
+            [data-testid="stSidebarCollapsedControl"] {{
+                background-color: rgba(0, 255, 0, 0.1) !important;
+                border-radius: 50% !important;
+                padding: 5px !important;
+            }}
+            
+            /* 🎨 分頁標籤 (Tabs) 高辨識度視覺強化 */
+            .stTabs [data-baseweb="tab-list"] {{
+                gap: 12px;
+                background-color: #111;
+                padding: 12px;
+                border-radius: 18px;
+                border: 1px solid #333;
+            }}
+            .stTabs [data-baseweb="tab"] {{
+                height: 52px;
+                background-color: #222;
+                border-radius: 12px;
+                color: #FFFFFF !important;
+                font-weight: 900;
+                border: 1px solid #444;
+                font-size: 1.1em;
+            }}
+            .stTabs [aria-selected="true"] {{
+                background-color: #FFD700 !important;
+                color: #000000 !important;
+                border: 2px solid #FFFFFF !important;
+                transform: scale(1.05);
+            }}
 
             /* 🏰 歡迎牆美工鎖死 */
             .welcome-wall {{ 
-                text-align: center; padding: 60px 20px; 
+                text-align: center; padding: 45px 15px; 
                 background: linear-gradient(rgba(0,0,0,0.85), rgba(0,0,0,0.85)), url('{m_bg}'); 
-                background-size: cover; background-position: center; border-radius: 30px; border: 2px solid #FFD700; margin-top: 20px; 
+                background-size: cover; background-position: center; border-radius: 30px; border: 2px solid #FFD700; margin-top: 10px; 
             }}
-            .welcome-title {{ font-size: clamp(2.5em, 8vw, 5em); color: #FFD700; font-weight: 900; text-shadow: 0 0 30px rgba(255,215,0,0.6); }}
-            .welcome-subtitle {{ color: #FFFFFF; font-size: 1.5em; letter-spacing: 5px; margin-bottom: 30px; }}
+            .welcome-title {{ font-size: clamp(2.3em, 7.5vw, 4.8em); color: #FFD700; font-weight: 900; text-shadow: 0 0 25px rgba(255,215,0,0.6); }}
+            .welcome-subtitle {{ color: #FFFFFF; font-size: 1.4em; letter-spacing: 5px; margin-bottom: 25px; }}
             
-            /* 📱 iPhone 視覺強化 */
-            .feature-box {{ background: rgba(0,0,0,0.8); padding: 22px; border-radius: 15px; margin: 15px auto; border: 1px solid #FFD700; max-width: 600px; text-align: left; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }}
-            .feature-title {{ color: #FFD700 !important; font-size: 1.3em !important; font-weight: 900 !important; text-shadow: 1px 1px 2px #000; display: block; }}
-            .feature-desc {{ color: #FFFFFF !important; font-size: 1.1em !important; font-weight: 500 !important; line-height: 1.4; text-shadow: 1px 1px 2px #000; display: block; }}
+            .feature-box {{ 
+                background: rgba(20,20,20,0.95); 
+                padding: 22px; 
+                border-radius: 15px; 
+                margin: 15px auto; 
+                border: 1px solid #FFD700; 
+                max-width: 580px; 
+                text-align: left;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.8);
+            }}
+            .feature-title {{ color: #FFD700 !important; font-size: 1.25em !important; font-weight: 900 !important; text-shadow: 1px 1px 3px #000; display: block; }}
+            .feature-desc {{ color: #FFFFFF !important; font-size: 1.1em !important; font-weight: 500 !important; line-height: 1.5; text-shadow: 1px 1px 2px #000; display: block; }}
             
-            .rank-card {{ padding: 30px 20px; border-radius: 30px; text-align: center; margin-bottom: 30px; border: 6px solid #FFD700; background-color: #111111; background-image: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), url('https://img.freepik.com/free-vector/dark-carbon-fiber-texture-background_1017-33831.jpg'); background-size: cover; box-shadow: 0 0 50px rgba(255, 215, 0, 0.2); }}
-            .xp-main {{ font-size: clamp(2.5em, 10vw, 4.5em); font-weight: 900; color: #FFFFFF; margin: 0; line-height: 1.1; }}
-            .xp-sub {{ font-size: 1.8em; color: #FF4646; font-weight: bold; margin-top: 5px; }}
-            .stats-box {{ font-size: 1.3em; color: #AAAAAA; margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; display: flex; justify-content: space-around; flex-wrap: wrap; gap: 10px; }}
+            [data-testid="stSidebarNav"] {{ color: #00FF00 !important; }}
+            
+            .rank-card {{ padding: 25px 15px; border-radius: 25px; text-align: center; margin-bottom: 25px; border: 5px solid #FFD700; background-color: #111111; background-image: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), url('https://img.freepik.com/free-vector/dark-carbon-fiber-texture-background_1017-33831.jpg'); background-size: cover; box-shadow: 0 0 40px rgba(255, 215, 0, 0.25); }}
+            .xp-main {{ font-size: clamp(2.4em, 9vw, 4.2em); font-weight: 900; color: #FFFFFF; margin: 0; line-height: 1.1; }}
+            .xp-sub {{ font-size: 1.7em; color: #FF4646; font-weight: bold; margin-top: 5px; }}
             
             .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; text-shadow: 0 0 15px rgba(255, 215, 0, 0.5); }}
             
-            /* 排行榜表格適配 */
-            [data-testid="stTable"] {{ background-color: #1a1a1a !important; border-radius: 10px; padding: 10px; }}
-            [data-testid="stTable"] td {{ color: #FFFFFF !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000; }}
-            [data-testid="stTable"] th {{ color: #FFD700 !important; background-color: #333333 !important; }}
+            [data-testid="stTable"] {{ background-color: #1a1a1a !important; border-radius: 12px; padding: 10px; border: 1px solid #333; }}
+            [data-testid="stTable"] td {{ color: #FFFFFF !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000; padding: 15px !important; }}
+            [data-testid="stTable"] th {{ color: #FFD700 !important; background-color: #262626 !important; padding: 12px !important; }}
 
-            .gold-medal {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000 !important; padding: 15px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 10px; box-shadow: 0 0 20px rgba(255,215,0,0.8); font-size: 1.4em; }}
-            .silver-medal {{ background: linear-gradient(45deg, #C0C0C0, #E8E8E8); color: #000 !important; padding: 12px; border-radius: 12px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.2em; }}
-            .bronze-medal {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF !important; padding: 10px; border-radius: 10px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.1em; }}
+            /* 🏅 月榜三甲特效物理焊接 */
+            .gold-medal {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000 !important; padding: 18px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 20px rgba(255,215,0,0.8); border: 2px solid #FFF; }}
+            .silver-medal {{ background: linear-gradient(45deg, #C0C0C0, #E8E8E8); color: #000 !important; padding: 16px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 15px rgba(192,192,192,0.6); border: 2px solid #FFF; }}
+            .bronze-medal {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF !important; padding: 14px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 12px; box-shadow: 0 0 12px rgba(205,127,50,0.5); border: 2px solid #FFF; }}
             
             .marquee-container {{ background: #1a1a1a; color: #FFD700; padding: 12px 0; overflow: hidden; white-space: nowrap; border-top: 2px solid #FFD700; border-bottom: 2px solid #FFD700; margin-bottom: 25px; }}
-            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.6em; font-weight: bold; }}
+            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.5em; font-weight: bold; }}
             @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
             
-            .stButton>button {{ border-radius: 12px; border: 2px solid #c89b3c; color: #c89b3c; background: transparent; font-weight: bold; transition: 0.3s; width: 100%; height: 50px; font-size: 1.2em; }}
+            .stButton>button {{ border-radius: 12px; border: 2px solid #c89b3c; color: #c89b3c; background: transparent; font-weight: bold; height: 50px; font-size: 1.1em; }}
             .stButton>button:hover {{ background: #c89b3c !important; color: #000 !important; }}
         </style>
         <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
@@ -97,20 +148,23 @@ def get_rank_v2500(pts):
 
 init_db(); init_flagship_ui()
 
-# --- 3. 身份永續鎖定 (iOS 鋼印穩定版) ---
+# --- 3. 身份永續鎖定 (Safari 物理兼容版) ---
 if "player_id" not in st.session_state:
     st.session_state.player_id = None
     st.session_state.access_level = "玩家"
 
-qp = st.query_params
-if qp.get("token") and st.session_state.player_id is None:
-    token_id = str(qp.get("token")).strip()
-    conn = sqlite3.connect('poker_data.db')
-    chk = conn.execute("SELECT role FROM Members WHERE pf_id = ?", (token_id,)).fetchone()
-    conn.close()
-    if chk:
-        st.session_state.player_id = token_id
-        st.session_state.access_level = chk[0]
+try:
+    current_params = st.query_params
+    if "token" in current_params and st.session_state.player_id is None:
+        token_id = str(current_params["token"]).strip()
+        conn = sqlite3.connect('poker_data.db')
+        u_auto = conn.execute("SELECT role FROM Members WHERE pf_id = ?", (token_id,)).fetchone()
+        conn.close()
+        if u_auto:
+            st.session_state.player_id = token_id
+            st.session_state.access_level = u_auto[0]
+except:
+    pass
 
 with st.sidebar:
     st.title("🛡️ 認證總部")
@@ -122,7 +176,7 @@ with st.sidebar:
     
     if p_id_input and u_chk:
         if st.text_input("密碼", type="password", key="login_pw") == u_chk[1]:
-            if st.button("啟動系統"): 
+            if st.button("🚀 啟動領地系統"): 
                 st.session_state.player_id = p_id_input
                 st.session_state.access_level = u_chk[0]
                 st.query_params["token"] = p_id_input
@@ -133,7 +187,7 @@ with st.sidebar:
             if st.form_submit_button("物理註冊") and ri == invite_cfg:
                 cr = sqlite3.connect('poker_data.db'); cr.execute("INSERT INTO Members (pf_id, name, role, xp, password) VALUES (?,?,?,?,?)", (p_id_input, rn, "玩家", 0, rpw)); cr.commit(); cr.close(); st.success("註冊成功！")
     
-    if st.button("退出王國"): 
+    if st.button("🚪 退出王國"): 
         st.session_state.player_id = None
         st.query_params.clear() 
         st.rerun()
@@ -143,17 +197,26 @@ if not st.session_state.player_id:
         <div class="welcome-wall">
             <div class="welcome-title">PRO POKER</div>
             <div class="welcome-subtitle">撲 洛 傳 奇 殿 堂</div>
-            <div class="feature-box"><span class="feature-title">🧧 領主認證通道</span><span class="feature-desc">輸入 POKERFANS ID 通過邀請碼驗證即可加入王國領地。</span></div>
-            <div class="feature-box"><span class="feature-title">🎰 幸運轉盤抽抽樂</span><span class="feature-desc">打牌賺XP簽到領紅利 大獎爆不完</span></div>
-            <div class="feature-box"><span class="feature-title">🛡️ 菁英榜單</span><span class="feature-desc">尊榮排行彰顯不凡身價 提升段位可增加抽獎幸運值</span></div>
-            <p style="margin-top:40px; color:#FFFFFF; font-weight:bold; text-shadow:1px 1px 2px #000;">請在側邊欄登入以啟動殿堂功能</p>
+            <div class="feature-box">
+                <span class="feature-title">🧧 玩家認證通道</span>
+                <span class="feature-desc">輸入 POKERFANS ID 通過邀請碼驗證即可加入撲克殿堂。</span>
+            </div>
+            <div class="feature-box">
+                <span class="feature-title">🎰 幸運轉盤抽抽樂</span>
+                <span class="feature-desc">打牌賺XP簽到領紅利 大獎爆不完</span>
+            </div>
+            <div class="feature-box">
+                <span class="feature-title">🛡️ 菁英榜單</span>
+                <span class="feature-desc">尊榮排行彰顯不凡身價 提升段位可增加抽獎幸運值</span>
+            </div>
+            <p style="margin-top:40px; color:#FFFFFF; font-weight:bold; text-shadow:1px 1px 2px #000;">請點擊左上角螢光綠箭頭 ⬅️ 開啟認證面板</p>
         </div>
     """, unsafe_allow_html=True); st.stop()
 
 # --- 4. 玩家主介面 ---
 conn = sqlite3.connect('poker_data.db')
 curr_m = datetime.now().strftime("%m")
-t_p = st.tabs(["🪪 會員卡", "🎰 轉盤抽獎", "⚔️ 軍火清冊", "🏆 榮耀榜"])
+t_p = st.tabs(["🪪 玩家排位", "🎰 轉盤抽獎", "⚔️ 軍火清冊", "🏆 榮耀榜"])
 
 with t_p[0]:
     u_row = pd.read_sql_query("SELECT * FROM Members WHERE pf_id=?", conn, params=(st.session_state.player_id,)).iloc[0]
@@ -172,7 +235,7 @@ with t_p[0]:
         if u_row['last_checkin'] == today_str: st.warning("⚠️ 今日已完成簽到！")
         else:
             conn.execute("UPDATE Members SET xp_temp = xp_temp + 10, last_checkin = ? WHERE pf_id = ?", (today_str, st.session_state.player_id))
-            conn.commit(); st.success("✅ 簽到成功！"); time.sleep(1); st.rerun()
+            conn.commit(); st.success("✅ 簽到成功！紅利 XP +10"); time.sleep(1); st.rerun()
 
     st.write("---"); st.markdown("#### 🎫 我的獲獎序號 (請至櫃台兌換)"); myp = pd.read_sql_query("SELECT id, prize_name, status FROM Prizes WHERE player_id=? ORDER BY id DESC", conn, params=(st.session_state.player_id,))
     for _, r in myp.iterrows():
@@ -182,18 +245,15 @@ with t_p[0]:
             if r['status'] == "已核銷" and st.button("🗑️", key=f"d_m_{r['id']}"):
                 conn.execute("DELETE FROM Prizes WHERE id=?", (r['id'],)); conn.commit(); st.rerun()
 
-with t_p[1]: # --- 【物理修正：轉盤報錯修復區】 ---
+with t_p[1]:
     st.subheader("🎰 英雄幸運轉盤 (消耗 100 XP)")
     if st.button("🚀 啟動命運齒輪"):
         if (u_row['xp'] + u_row['xp_temp']) >= 100:
             inv = pd.read_sql_query("SELECT * FROM Inventory WHERE stock > 0", conn)
             if not inv.empty:
-                # 物理重構進度條，消除 DeltaGenerator 推導式報錯
                 pb = st.progress(0)
                 for i in range(100):
-                    time.sleep(0.01)
-                    pb.progress(i + 1)
-                
+                    time.sleep(0.01); pb.progress(i + 1)
                 win = random.choices(inv.to_dict('records'), weights=[float(w) for w in inv['weight'].tolist()], k=1)[0]
                 if u_row['xp_temp'] >= 100: conn.execute("UPDATE Members SET xp_temp = xp_temp - 100 WHERE pf_id = ?", (st.session_state.player_id,))
                 else: conn.execute("UPDATE Members SET xp_temp = 0, xp = xp - ? WHERE pf_id = ?", (100 - u_row['xp_temp'], st.session_state.player_id))
@@ -216,33 +276,31 @@ with t_p[2]:
                 <p style="color:#666; font-size:0.8em;">庫存: {row['stock']}</p>
             </div>''', unsafe_allow_html=True)
 
-with t_p[3]:
+with t_p[3]: # --- 【核心修復】：三甲特效對位 ---
     rk1, rk2 = st.columns(2)
     with rk1:
         st.markdown('<div class="glory-title">🎖️ 菁英總榜</div>', unsafe_allow_html=True)
         ldf = pd.read_sql_query("SELECT player_id as ID, hero_points FROM Leaderboard WHERE ID != '330999' ORDER BY hero_points DESC LIMIT 20", conn)
-        if ldf.empty:
-            st.info("🛡️ 王國傳奇尚未誕生，等待領主降臨...")
+        if ldf.empty: st.info("🛡️ 王國傳奇尚未誕生...")
         else:
             ldf['榮耀牌位'] = ldf['hero_points'].apply(get_rank_v2500)
             st.table(ldf[['ID', '榮耀牌位']])
     with rk2:
         st.markdown(f'<div class="glory-title">🔥 {curr_m}月 巔峰戰力榜</div>', unsafe_allow_html=True)
         m_active = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
-        if m_active == "OFF":
-            st.info("🏆 本月活動暫未開啟，敬請期待下期挑戰！")
+        if m_active == "OFF": st.info("🏆 本月活動暫未開啟！")
         else:
             gdf = pd.read_sql_query("SELECT player_id as ID, monthly_points as 積分 FROM Monthly_God WHERE ID != '330999' ORDER BY 積分 DESC LIMIT 15", conn)
-            if gdf.empty:
-                st.warning("⚔️ 目前尚未有英雄上榜，領主們請加把勁！")
+            if gdf.empty: st.warning("⚔️ 目前尚未有人上榜！")
             else:
                 for i, r in gdf.iterrows():
+                    # 物理對位：前三名各自顯示專屬特效
                     if i == 0: st.markdown(f'<div class="gold-medal">👑 冠軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 1: st.markdown(f'<div class="silver-medal">🥈 亞軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 2: st.markdown(f'<div class="bronze-medal">🥉 季軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     else: st.markdown(f'<div style="color:white; font-weight:bold; text-shadow:1px 1px 2px #000; margin-bottom:5px;">NO.{i+1}: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
 
-# --- 5. 指揮部 (全量物理鎖死) ---
+# --- 5. 指揮部 ---
 if st.session_state.access_level in ["老闆", "店長"]:
     st.write("---"); st.header("⚙️ 王國指揮部")
     mt = st.tabs(["📁 精算", "📦 物資", "🚀 空投", "📢 視覺", "🎯 任命", "🗑️ 結算", "📜 核銷", "💾 備份"])
@@ -270,7 +328,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 conn_c.commit(); st.success("精算完成")
             conn_c.close()
 
-    with mt[1]: # 物資管理
+    with mt[1]:
         with st.form("ni"):
             nn, nv, ns, nw = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0)
             n_mx = st.number_input("XP 資格門檻", 0); img_url = st.text_input("圖片網址")
@@ -281,33 +339,35 @@ if st.session_state.access_level in ["老闆", "店長"]:
         for _, ri in mdf.iterrows():
             with st.expander(f"📦 {ri['item_name']}"):
                 eq, ew = st.number_input("補貨", 0, key=f"q_{ri['item_name']}"), st.number_input("權重", ri['weight'], key=f"w_{ri['item_name']}")
-                new_url = st.text_input("圖片連結", ri['img_url'], key=f"url_{ri['item_name']}")
-                new_mx = st.number_input("XP 門檻", int(ri['min_xp']), key=f"mx_{ri['item_name']}")
+                new_url = st.text_input("連結", ri['img_url'], key=f"url_{ri['item_name']}")
+                new_mx = st.number_input("門檻", int(ri['min_xp']), key=f"mx_{ri['item_name']}")
                 if st.button("💾 更新", key=f"u_{ri['item_name']}"): 
                     conn.execute("UPDATE Inventory SET stock=stock+?, weight=?, img_url=?, min_xp=? WHERE item_name=?", (eq, ew, new_url, new_mx, ri['item_name'])); conn.commit(); st.rerun()
 
-    with mt[2]: # 🚀 空投
-        tid = st.text_input("目標 ID"); val = st.number_input("XP 數額", 0)
+    with mt[2]:
+        tid = st.text_input("目標玩家 ID"); val = st.number_input("XP 數額", 0)
         if st.button("🚀 執行空投"): conn.execute("UPDATE Members SET xp_temp = xp_temp + ? WHERE pf_id = ?", (val, tid)) if tid else conn.execute("UPDATE Members SET xp_temp = xp_temp + ?", (val,)); conn.commit(); st.success("成功")
 
-    with mt[3]: # 📢 視覺
+    with mt[3]:
         ns_v = st.slider("速度", 5, 60, 35); ic_v = st.text_input("邀請碼", "888")
         txt_v = st.text_area("公告內容"); bg_v = st.text_input("背景 URL")
         curr_act = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
         if st.button("🔓 開啟/🔒 關閉月榜"):
-            conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('monthly_active', ?)", ("OFF" if curr_act=="ON" else "ON",)); conn.commit(); st.rerun()
+            new_act = "OFF" if curr_act == "ON" else "ON"
+            conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('monthly_active', ?)", (new_act,))
+            conn.commit(); st.rerun()
         if st.button("💾 保存設定"):
-            conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (str(ns_v), ic_v, txt_v))
+            conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (str(ns_v), ic_v, txt_v))
             if bg_v: conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('welcome_bg_url',?)", (bg_v,))
             conn.commit(); st.rerun()
 
-    with mt[4]: # 🎯 任命
-        rid_v = st.text_input("調動 ID"); rl_v = st.selectbox("職位", ["玩家", "員工", "店長", "老闆"])
+    with mt[4]:
+        rid_v = st.text_input("調動 ID"); rl_v = st.selectbox("任命職位", ["玩家", "員工", "店長", "老闆"])
         if st.button("🪄 任命"):
             pws = {"老闆":"kenken520", "店長":"3939889", "員工":"88888", "玩家":"123456"}
             conn.execute("UPDATE Members SET role=?, password=? WHERE pf_id=?", (rl_v, pws[rl_v], rid_v)); conn.commit(); st.success("成功")
 
-    with mt[5]: # 結算 (僅限老闆)
+    with mt[5]:
         if st.session_state.access_level == "老闆":
             if st.button("⚖️ 規費削減"): conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 150)"); conn.commit(); st.success("完成")
             if st.button("🔥 粉碎月榜"): conn.execute("DELETE FROM Monthly_God"); conn.commit(); st.rerun()
@@ -334,7 +394,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
 
     with mt[7]: # 💾 備份 (店長解放)
         if os.path.exists('poker_data.db'):
-            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載 DB", f, "Backup.db")
+            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載物理 DB", f, "Backup.db")
         if st.session_state.access_level == "老闆":
             rf = st.file_uploader("數據還原", type="db")
             if rf and st.button("🚨 強制物理還原"):
