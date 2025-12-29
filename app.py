@@ -111,7 +111,6 @@ with st.sidebar:
     if st.button("退出王國"): st.session_state.player_id = None; st.rerun()
 
 if not st.session_state.player_id:
-    # --- 【物理更正：入口網站標題說明焊死】 ---
     st.markdown(f"""
         <div class="welcome-wall">
             <div class="welcome-title">PRO POKER</div>
@@ -215,8 +214,8 @@ if st.session_state.access_level in ["老闆", "店長"]:
     st.write("---"); st.header("⚙️ 王國指揮部")
     mt = st.tabs(["📁 精算", "📦 物資", "🚀 空投", "📢 視覺", "🎯 任命", "🗑️ 結算", "📜 核銷", "💾 備份"])
 
-    with mt[0]:
-        up = st.file_uploader("上傳報表", type="csv")
+    with mt[0]: # 📁 精算分頁 (職權物理擴張至店長)
+        up = st.file_uploader("上傳報表 (CSV)", type="csv")
         if up and st.button("🚀 執行精算"):
             df_c = pd.read_csv(up); df_c.columns = df_c.columns.str.strip(); conn_c = sqlite3.connect('poker_data.db')
             if conn_c.execute("SELECT 1 FROM Import_History WHERE filename = ?", (up.name,)).fetchone(): st.error("❌ 檔案重複匯入！")
@@ -238,7 +237,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 conn_c.commit(); st.success("精算對位完成")
             conn_c.close()
 
-    with mt[1]: # 物資管理
+    with mt[1]: # 📦 物資
         with st.form("ni"):
             nn, nv, ns, nw, n_mx = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0), st.number_input("門檻", 0)
             img_url_input = st.text_input("圖片網路連結 (http/https)")
@@ -281,10 +280,12 @@ if st.session_state.access_level in ["老闆", "店長"]:
             pws = {"老闆":"kenken520", "店長":"3939889", "員工":"88888", "玩家":"123456"}
             conn.execute("UPDATE Members SET role=?, password=? WHERE pf_id=?", (rl_v, pws[rl_v], rid_v)); conn.commit(); st.success("成功")
 
-    with mt[5]: # 🗑️ 結算
-        if st.button("⚖️ 英雄規費削減"): conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 150)"); conn.commit(); st.success("完成")
-        if st.button("🔥 粉碎月榜"): conn.execute("DELETE FROM Monthly_God"); conn.commit(); st.rerun()
-        if st.button("💀 粉碎總榜"): conn.execute("DELETE FROM Leaderboard WHERE player_id != '330999'"); conn.commit(); st.rerun()
+    with mt[5]: # 🗑️ 結算 (僅限老闆)
+        if st.session_state.access_level == "老闆":
+            if st.button("⚖️ 英雄規費削減"): conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 150)"); conn.commit(); st.success("完成")
+            if st.button("🔥 粉碎月榜"): conn.execute("DELETE FROM Monthly_God"); conn.commit(); st.rerun()
+            if st.button("💀 粉碎總榜"): conn.execute("DELETE FROM Leaderboard WHERE player_id != '330999'"); conn.commit(); st.rerun()
+        else: st.warning("⚖️ 結算權限僅限老闆本人。")
 
     with mt[6]: # 📜 核銷
         sid_v = st.number_input("輸入序號 ID", value=0, step=1)
@@ -304,12 +305,15 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 if st.session_state.access_level == "老闆" and st.button("🗑️", key=f"ld_{rv['id']}"):
                     conn.execute("DELETE FROM Staff_Logs WHERE id=?", (rv['id'],)); conn.commit(); st.rerun()
 
-    with mt[7]: # 💾 備份
+    with mt[7]: # 💾 備份 (職權物理擴張至店長)
         if os.path.exists('poker_data.db'):
-            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載 DB", f, "Backup.db")
-        rf = st.file_uploader("還原", type="db")
-        if rf and st.button("強制還原"):
-            with open('poker_data.db', 'wb') as f: f.write(rf.getbuffer())
-            st.success("成功"); st.rerun()
+            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載物理 DB", f, "Backup.db")
+        
+        # 數據還原維持老闆權限，避免重大誤觸
+        if st.session_state.access_level == "老闆":
+            rf = st.file_uploader("數據還原 (需上傳 .db 檔)", type="db")
+            if rf and st.button("🚨 強制物理還原"):
+                with open('poker_data.db', 'wb') as f: f.write(rf.getbuffer())
+                st.success("數據已物理還原！"); time.sleep(1); st.rerun()
 
 conn.close()
