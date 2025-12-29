@@ -23,7 +23,13 @@ def init_flagship_ui():
     
     st.markdown(f"""
         <style>
-            .main {{ background-color: #000000; color: #FFFFFF; font-family: 'Arial Black', sans-serif; }}
+            /* 🌌 強制鎖定全系統底色 (防止 iOS 變白) */
+            html, body, [data-testid="stAppViewContainer"] {{
+                background-color: #000000 !important;
+                color: #FFFFFF !important;
+            }}
+            .main {{ background-color: #000000 !important; color: #FFFFFF !important; font-family: 'Arial Black', sans-serif; }}
+
             /* 🏰 歡迎牆美工鎖死 */
             .welcome-wall {{ 
                 text-align: center; padding: 60px 20px; 
@@ -35,7 +41,7 @@ def init_flagship_ui():
             
             /* 📱 iPhone 視覺強化 */
             .feature-box {{ 
-                background: rgba(0,0,0,0.7); 
+                background: rgba(0,0,0,0.8); 
                 padding: 22px; 
                 border-radius: 15px; 
                 margin: 15px auto; 
@@ -72,8 +78,25 @@ def init_flagship_ui():
             .xp-sub {{ font-size: 1.8em; color: #FF4646; font-weight: bold; margin-top: 5px; }}
             .stats-box {{ font-size: 1.3em; color: #AAAAAA; margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; display: flex; justify-content: space-around; flex-wrap: wrap; gap: 10px; }}
             
-            /* 🏆 標題與排行榜特效焊死 */
+            /* 🏆 榮耀榜與榜單對比強化 (解決 iOS 白色底色問題) */
             .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; text-shadow: 0 0 15px rgba(255, 215, 0, 0.5); }}
+            
+            /* 強制修改表格顯示，確保 ID 不會隱身 */
+            [data-testid="stTable"] {{
+                background-color: #1a1a1a !important;
+                border-radius: 10px;
+                padding: 10px;
+            }}
+            [data-testid="stTable"] td {{
+                color: #FFFFFF !important;
+                font-weight: bold !important;
+                text-shadow: 1px 1px 2px #000;
+            }}
+            [data-testid="stTable"] th {{
+                color: #FFD700 !important;
+                background-color: #333333 !important;
+            }}
+
             .gold-medal {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000 !important; padding: 15px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 10px; box-shadow: 0 0 20px rgba(255,215,0,0.8); font-size: 1.4em; }}
             .silver-medal {{ background: linear-gradient(45deg, #C0C0C0, #E8E8E8); color: #000 !important; padding: 12px; border-radius: 12px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.2em; }}
             .bronze-medal {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF !important; padding: 10px; border-radius: 10px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.1em; }}
@@ -84,7 +107,6 @@ def init_flagship_ui():
             
             .stButton>button {{ border-radius: 12px; border: 2px solid #c89b3c; color: #c89b3c; background: transparent; font-weight: bold; transition: 0.3s; width: 100%; height: 50px; font-size: 1.2em; }}
             .stButton>button:hover {{ background: #c89b3c !important; color: #000 !important; }}
-            .stTable td, .stTable th {{ font-size: 1.4em !important; color: #FFFFFF !important; }}
         </style>
         <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
     """, unsafe_allow_html=True)
@@ -230,7 +252,10 @@ with t_p[3]:
     with rk1:
         st.markdown('<div class="glory-title">🎖️ 菁英總榜</div>', unsafe_allow_html=True)
         ldf = pd.read_sql_query("SELECT player_id as ID, hero_points FROM Leaderboard WHERE ID != '330999' ORDER BY hero_points DESC LIMIT 20", conn)
-        if not ldf.empty: ldf['榮耀牌位'] = ldf['hero_points'].apply(get_rank_v2500); st.table(ldf[['ID', '榮耀牌位']])
+        if not ldf.empty: 
+            ldf['榮耀牌位'] = ldf['hero_points'].apply(get_rank_v2500)
+            # 使用表單格式展示，確保背景深色
+            st.table(ldf[['ID', '榮耀牌位']])
     with rk2:
         st.markdown(f'<div class="glory-title">🔥 {curr_m}月 巔峰戰力榜</div>', unsafe_allow_html=True)
         m_active = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
@@ -243,7 +268,7 @@ with t_p[3]:
                     if i == 0: st.markdown(f'<div class="gold-medal">👑 冠軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 1: st.markdown(f'<div class="silver-medal">🥈 亞軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 2: st.markdown(f'<div class="bronze-medal">🥉 季軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
-                    else: st.write(f"NO.{i+1}: {r['ID']} — {r['積分']} Pts")
+                    else: st.markdown(f'<div style="color:white; font-weight:bold; text-shadow:1px 1px 2px #000; margin-bottom:5px;">NO.{i+1}: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
 
 # --- 5. 指揮部 (全量物理鎖死) ---
 if st.session_state.access_level in ["老闆", "店長"]:
@@ -273,13 +298,12 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 conn_c.commit(); st.success("精算對位完成")
             conn_c.close()
 
-    with mt[1]: # --- 【物理對位修正區：XP 資格門檻】 ---
+    with mt[1]: # 物資管理 (XP 資格門檻對位)
         with st.form("ni"):
             nn, nv, ns, nw = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0)
             n_mx = st.number_input("XP 抽獎資格門檻", 0)
             img_url_input = st.text_input("圖片網路連結 (http/https)")
             if st.form_submit_button("🔨 執行物理上架"):
-                # 7 欄位對位：item_name, stock, item_value, weight, img_url, min_xp
                 conn.execute("INSERT OR REPLACE INTO Inventory (item_name, stock, item_value, weight, img_url, min_xp) VALUES (?,?,?,?,?,?)", (nn, ns, nv, nw, img_url_input, n_mx))
                 conn.commit(); st.success("上架成功！"); st.rerun()
         st.write("---"); mdf = pd.read_sql_query("SELECT * FROM Inventory", conn)
@@ -341,7 +365,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
         ldf_v = pd.read_sql_query("SELECT id, staff_id, player_id, prize_name, time FROM Staff_Logs ORDER BY id DESC LIMIT 15", conn)
         for _, rv in ldf_v.iterrows():
             c_a, c_b = st.columns([5, 1])
-            with c_a: st.write(f"[{rv['time']}] {rv['staff_id']} 核銷 {rv['player_id']} 的 {rv['prize_name']}")
+            with c_a: st.markdown(f'<div style="color:white; font-size:0.9em;">[{rv["time"]}] {rv["staff_id"]} 核銷 {rv["player_id"]} 的 {rv["prize_name"]}</div>', unsafe_allow_html=True)
             with c_b:
                 if st.session_state.access_level == "老闆" and st.button("🗑️", key=f"ld_{rv['id']}"):
                     conn.execute("DELETE FROM Staff_Logs WHERE id=?", (rv['id'],)); conn.commit(); st.rerun()
