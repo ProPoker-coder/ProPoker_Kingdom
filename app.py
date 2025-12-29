@@ -48,27 +48,15 @@ def init_flagship_ui():
                 padding: 5px !important;
             }}
             
-            /* 🎨 分頁標籤 (Tabs) 高辨識度視覺強化 */
+            /* 🎨 分頁標籤 (Tabs) 高辨識度視覺焊接 */
             .stTabs [data-baseweb="tab-list"] {{
-                gap: 12px;
-                background-color: #111;
-                padding: 12px;
-                border-radius: 18px;
-                border: 1px solid #333;
+                gap: 12px; background-color: #111; padding: 12px; border-radius: 18px; border: 1px solid #333;
             }}
             .stTabs [data-baseweb="tab"] {{
-                height: 52px;
-                background-color: #222;
-                border-radius: 12px;
-                color: #FFFFFF !important;
-                font-weight: 900;
-                font-size: 1.1em;
+                height: 52px; background-color: #222; border-radius: 12px; color: #FFFFFF !important; font-weight: 900; font-size: 1.1em;
             }}
             .stTabs [aria-selected="true"] {{
-                background-color: #FFD700 !important;
-                color: #000000 !important;
-                border: 2px solid #FFFFFF !important;
-                transform: scale(1.03);
+                background-color: #FFD700 !important; color: #000000 !important; border: 2px solid #FFFFFF !important; transform: scale(1.03);
             }}
 
             /* 🏰 歡迎牆美工鎖死 */
@@ -136,9 +124,7 @@ def init_db():
     c.execute("UPDATE Members SET password = 'kenken520', role = '老闆' WHERE pf_id = '330999'")
     conn.commit(); conn.close()
 
-# --- 【物理對位修正】：恢復純積分牌位判定 ---
 def get_rank_v2500(pts):
-    # 此處恢復為絕對積分門檻，即便排名第 1，分數不到也不會顯示菁英
     if pts >= 2501: return "🏆 菁英 (Challenger)"
     elif pts >= 1001: return "🎖️ 大師 (Master)"
     elif pts >= 401:  return "💎 鑽石 (Diamond)"
@@ -215,7 +201,7 @@ with t_p[0]:
     m_pts = (conn.execute("SELECT monthly_points FROM Monthly_God WHERE player_id=?", (st.session_state.player_id,)).fetchone() or (0,))[0]
     m_active = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
 
-    # --- 【物理對位】：即時雙榜排名計算 ---
+    # --- 【物理對位】：即時雙榜排名 ---
     e_rk_val = conn.execute("SELECT COUNT(*) + 1 FROM Leaderboard WHERE hero_points > ? AND player_id != '330999'", (h_pts,)).fetchone()[0]
     m_rk_val = conn.execute("SELECT COUNT(*) + 1 FROM Monthly_God WHERE monthly_points > ? AND player_id != '330999'", (m_pts,)).fetchone()[0]
     m_display_rk = f"第 {m_rk_val:,} 名" if m_active == "ON" else "比賽未開啟"
@@ -237,7 +223,7 @@ with t_p[0]:
 
     if st.button("🎰 幸運簽到"):
         today = datetime.now().strftime("%Y-%m-%d")
-        if u_row['last_checkin'] == today: st.warning("⚠️ 今日已完成簽到！")
+        if u_row['last_checkin'] == today: st.warning("⚠️ 今日已簽到！")
         else:
             conn.execute("UPDATE Members SET xp_temp = xp_temp + 10, last_checkin = ? WHERE pf_id = ?", (today, st.session_state.player_id))
             conn.commit(); st.success("✅ 簽到成功！紅利 XP +10"); time.sleep(1); st.rerun()
@@ -252,7 +238,7 @@ with t_p[0]:
         with cb:
             if r['status'] == "已核銷" and st.button("🗑️", key=f"d_m_{r['id']}"): conn.execute("DELETE FROM Prizes WHERE id=?", (r['id'],)); conn.commit(); st.rerun()
 
-with t_p[1]: # --- 【焊接】：轉盤穩定化 (基於 v2500.34) ---
+with t_p[1]: # --- 【焊接】：轉盤穩定化迴圈 (基於 v2500.34) ---
     st.subheader("🎰 幸運轉盤 (消耗 100 XP)")
     if st.button("🚀 啟動命運齒輪"):
         if (u_row['xp'] + u_row['xp_temp']) >= 100:
@@ -268,7 +254,7 @@ with t_p[1]: # --- 【焊接】：轉盤穩定化 (基於 v2500.34) ---
                 conn.commit(); st.balloons(); st.success(f"🎰 獲得獎項：{win['item_name']}")
         else: st.warning("XP 不足")
 
-with t_p[2]: # --- 【焊接】：老闆贈禮按鈕 ---
+with t_p[2]: # --- 【焊接】：老闆贈禮 ---
     st.subheader("⚔️ 撲洛軍火展示")
     gun_df = pd.read_sql_query("SELECT * FROM Inventory WHERE status = '上架中' ORDER BY item_value DESC", conn)
     cols = st.columns(3)
@@ -287,12 +273,13 @@ with t_p[2]: # --- 【焊接】：老闆贈禮按鈕 ---
                         conn.execute("INSERT INTO Prizes (player_id, prize_name, status, time) VALUES (?, ?, '待兌換', ?)", (gtid, row['item_name'], datetime.now()))
                         conn.commit(); st.success("已贈出"); st.rerun()
 
-with t_p[3]:
+with t_p[3]: # --- 【焊接】：榜單狀態 ---
     rk1, rk2 = st.columns(2)
     with rk1:
         st.markdown('<div class="glory-title">🎖️ 菁英總榜</div>', unsafe_allow_html=True)
         ldf = pd.read_sql_query("SELECT player_id as ID, hero_points FROM Leaderboard WHERE ID != '330999' ORDER BY hero_points DESC LIMIT 20", conn)
-        if not ldf.empty:
+        if ldf.empty: st.info("🛡️ 王國傳奇尚未誕生...")
+        else:
             ldf['榮耀牌位'] = ldf['hero_points'].apply(get_rank_v2500)
             st.table(ldf[['ID', '榮耀牌位']])
     with rk2:
@@ -300,14 +287,15 @@ with t_p[3]:
         if m_active == "OFF": st.info("🏆 本月活動暫未開啟！")
         else:
             gdf = pd.read_sql_query("SELECT player_id as ID, monthly_points as 積分 FROM Monthly_God WHERE ID != '330999' ORDER BY 積分 DESC LIMIT 15", conn)
-            if not gdf.empty:
+            if gdf.empty: st.warning("⚔️ 目前尚未有人上榜！")
+            else:
                 for i, r in gdf.iterrows():
                     if i == 0: st.markdown(f'<div class="gold-medal">👑 冠軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 1: st.markdown(f'<div class="silver-medal">🥈 亞軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
                     elif i == 2: st.markdown(f'<div class="bronze-medal">🥉 季軍: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
-                    else: st.markdown(f'<div style="color:white; font-weight:bold; text-shadow:1px 1px 2px #000; margin-bottom:5px;">NO.{i+1}: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
+                    else: st.markdown(f'<div style="color:white; font-weight:bold; margin-bottom:5px;">NO.{i+1}: {r["ID"]} — {r["積分"]} Pts</div>', unsafe_allow_html=True)
 
-# --- 5. 指揮部 (10% XP、1200 權重、三方案規費焊接) ---
+# --- 5. 指揮部 (10% XP、0.75權重、日誌管理與結算方案) ---
 if st.session_state.access_level in ["老闆", "店長", "員工"]:
     st.write("---"); st.header("⚙️ 王國指揮部")
     user_role = st.session_state.access_level
@@ -320,9 +308,9 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         mt = st.tabs(active_labels)
         for i, label in enumerate(active_labels):
             with mt[i]:
-                if label == "📁 精算": # --- 【核心對位】：10% 回饋與 1200 權重 0.75 ---
-                    st.info("💡 檔名規範：2025_12_30_3400... (必須含日期與金額)")
-                    up = st.file_uploader("上傳報表", type="csv")
+                if label == "📁 精算": # --- 【核心修正】：修正 NameError 'rank' ---
+                    st.info("💡 檔名規範：2025_12_30_3400... (必須含日期與買入金額)")
+                    up = st.file_uploader("上傳錦標賽報表 (CSV/TSV)", type="csv")
                     if up:
                         fn = up.name
                         date_m = re.search(r'(\d{4}_\d{1,2}_\d{1,2})', fn)
@@ -343,8 +331,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                                     df_c.columns = df_c.columns.str.strip(); conn_c = sqlite3.connect('poker_data.db')
                                     if conn_c.execute("SELECT 1 FROM Import_History WHERE filename = ?", (fn,)).fetchone(): st.error("❌ 已匯入過")
                                     else:
-                                        # 1200 權重 0.75，其餘維持 v2500.34
-                                        matrix = { 1200:(200, 0.75, [10,5,3]), 3400:(400, 1.5, [15,8,5]), 6600:(600, 2.0,[20,10,6]), 11000:(1000, 3.0,[30,15,9]), 21500:(2000, 5.0,[50,25,15]) }
+                                        # 1200 權重 0.75
+                                        matrix = { 1200:(200, 0.75, [10,5,3]), 3400:(400, 1.5, [15,8,5]), 6600:(600, 2.0, [20,10,6]), 11000:(1000, 3.0, [30,15,9]), 21500:(2000, 5.0, [50,25,15]) }
                                         prof_base, base_p, r_l = matrix[buy_val]
                                         for _, rc in df_c.iterrows():
                                             pid, nick = str(rc['ID']).strip(), str(rc['Nickname']).strip()
@@ -353,7 +341,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                                             disc = sum(int(d) for d in re.findall(r'(\d+)折扣券', rem))
                                             # 行政費回饋物理校準為 10%
                                             xp_g = max(0, (prof_base * 0.1 * ents) - (disc * 0.1))
-                                            pts_g = int((ents * base_p) + (r_l[rank-1] if rk <= 3 else 0))
+                                            # --- 【物理修復】：將 rank-1 修正為 rk-1 ---
+                                            pts_g = int((ents * base_p) + (r_l[rk-1] if rk <= 3 else 0))
                                             conn_c.execute("INSERT OR IGNORE INTO Members (pf_id, name) VALUES (?,?)", (pid, nick))
                                             conn_c.execute("UPDATE Members SET xp = xp + ? WHERE pf_id = ?", (xp_g, pid))
                                             conn_c.execute("INSERT OR IGNORE INTO Leaderboard (player_id) VALUES (?)", (pid,))
@@ -361,29 +350,31 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                                             conn_c.execute("INSERT OR IGNORE INTO Monthly_God (player_id) VALUES (?)", (pid,))
                                             conn_c.execute("UPDATE Monthly_God SET monthly_points = monthly_points + ? WHERE player_id = ?", (pts_g, pid))
                                         conn_c.execute("INSERT INTO Import_History VALUES (?, ?)", (fn, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                                        conn_c.commit(); st.success("精算完成")
+                                        conn_c.commit(); st.success("精算對位完成！")
                                     conn_c.close()
-                    st.write("---"); log_df = pd.read_sql_query("SELECT filename as 檔名, import_time as 時間 FROM Import_History ORDER BY 時間 DESC", conn)
+                    st.write("---"); st.subheader("📜 精算歷史日誌")
+                    log_df = pd.read_sql_query("SELECT filename as 檔名, import_time as 時間 FROM Import_History ORDER BY 時間 DESC", conn)
                     if not log_df.empty:
                         st.table(log_df)
                         if user_role == "老闆":
-                            if st.button("🗑️ 清空歷史紀錄"): conn.execute("DELETE FROM Import_History"); conn.commit(); st.rerun()
+                            if st.button("🗑️ 清空所有匯入紀錄 (最高權限)"):
+                                conn.execute("DELETE FROM Import_History"); conn.commit(); st.warning("日誌已全量抹除！"); st.rerun()
 
                 elif label == "📦 物資":
                     with st.form("ni_form"):
-                        nn = st.text_input("物資名"); nv = st.number_input("價值", 0); ns = st.number_input("庫存", 0); nw = st.number_input("權重", 10.0); nmx = st.number_input("XP 門檻", 0); img = st.text_input("網址")
+                        nn = st.text_input("物資名"); nv = st.number_input("價值", 0); ns = st.number_input("庫存", 0); nw = st.number_input("權重", 10.0); nmx = st.number_input("門檻", 0); img = st.text_input("網址")
                         if st.form_submit_button("🔨 執行上架"):
                             conn.execute("INSERT OR REPLACE INTO Inventory (item_name, stock, item_value, weight, img_url, min_xp, status) VALUES (?,?,?,?,?,?, '上架中')", (nn, ns, nv, nw, img, nmx)); conn.commit(); st.rerun()
                     st.write("---")
                     mdf = pd.read_sql_query("SELECT * FROM Inventory", conn)
                     for _, ri in mdf.iterrows():
                         with st.expander(f"📦 管理：{ri['item_name']} ({ri['status']})"):
-                            eq = st.number_input("補貨", 0, key=f"q_{ri['item_name']}"); ew = st.number_input("修正權重", value=ri['weight'], key=f"w_{ri['item_name']}")
+                            eq = st.number_input("補貨", 0, key=f"q_{ri['item_name']}"); ew = st.number_input("權重", value=ri['weight'], key=f"w_{ri['item_name']}")
                             nx = st.number_input("門檻", value=int(ri['min_xp']), key=f"mx_{ri['item_name']}"); nu = st.text_input("網址", value=ri['img_url'], key=f"url_{ri['item_name']}")
                             estat = st.selectbox("狀態", ["上架中", "下架中"], index=0 if ri['status']=="上架中" else 1, key=f"st_{ri['item_name']}")
                             if st.button("💾 保存", key=f"s_{ri['item_name']}"): 
                                 conn.execute("UPDATE Inventory SET stock=stock+?, weight=?, img_url=?, min_xp=?, status=? WHERE item_name=?", (eq, ew, nu, nx, estat, ri['item_name'])); conn.commit(); st.rerun()
-                            if st.button("🗑️ 刪除", key=f"del_{ri['item_name']}"): conn.execute("DELETE FROM Inventory WHERE item_name=?", (ri['item_name'],)); conn.commit(); st.rerun()
+                            if st.button("🗑️ 刪除物資", key=f"del_{ri['item_name']}"): conn.execute("DELETE FROM Inventory WHERE item_name=?", (ri['item_name'],)); conn.commit(); st.rerun()
 
                 elif label == "🚀 空投":
                     st.subheader("🎯 階級精準空投")
@@ -407,25 +398,27 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                                 conn.execute("INSERT INTO Prizes (player_id, prize_name, status, time) VALUES (?, ?, '待兌換', ?)", (tid, ditem, datetime.now()))
                         conn.commit(); st.success("完成")
 
-                elif label == "📢 視覺":
-                    ns_v = st.slider("速度", 5, 60, 35); ic_v = st.text_input("邀請碼", "888"); txt_v = st.text_area("公告")
-                    if st.button("💾 保存"):
-                        conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (str(ns_v), ic_v, txt_v)); conn.commit(); st.rerun()
+                elif label == "📢 視覺": # --- 【焊接】：月榜開關 ---
+                    st.subheader("📢 視覺公告與活動控制")
+                    cur_m_act = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
+                    m_act_v = st.radio("🔥 月榜活動狀態", ["ON", "OFF"], index=0 if cur_m_act == "ON" else 1, horizontal=True)
+                    ns_v = st.slider("跑馬燈速度", 5, 60, int((conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_speed'").fetchone() or ("35",))[0]))
+                    ic_v = st.text_input("邀請碼", (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'reg_invite_code'").fetchone() or ("888",))[0])
+                    txt_v = st.text_area("跑馬燈公告內容", (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_text'").fetchone() or ("撲洛王國營運中，歡迎回歸領地！",))[0])
+                    if st.button("💾 保存視覺配置"):
+                        conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('monthly_active',?),('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (m_act_v, str(ns_v), ic_v, txt_v))
+                        conn.commit(); st.rerun()
 
                 elif label == "🎯 任命":
                     rid_v = st.text_input("目標 ID"); rl_v = st.selectbox("職位", ["玩家", "員工", "店長", "老闆"])
-                    if st.button("🪄 執行"):
+                    if st.button("🪄 執行任命"):
                         pws = {"老闆":"kenken520", "店長":"3939889", "員工":"88888", "玩家":"123456"}
                         conn.execute("UPDATE Members SET role=?, password=? WHERE pf_id=?", (rl_v, pws[rl_v], rid_v)); conn.commit(); st.success("成功")
 
-                elif label == "🗑️ 結算": # --- 【物理焊接】：方案 A/B/C 結算 ---
-                    st.subheader("⚖️ 英雄規費削減方案選擇")
-                    scheme = st.selectbox("削減策略", [
-                        "方案 A：固定定額 (每人 -150)", 
-                        "方案 B：階級權重 (菁英-200 / 大師-100 / 其餘-50)", 
-                        "方案 C：比例削減 (全體 Pts 物理削減 -10%)"
-                    ])
-                    if st.button("🚨 執行結算"):
+                elif label == "🗑️ 結算": # --- 【焊接】：三方案規費結算 ---
+                    st.subheader("⚖️ 英雄規費削減方案")
+                    scheme = st.selectbox("削減策略", ["方案 A：固定定額 (每人 -150)", "方案 B：階級權重 (菁英-200 / 大師-100 / 其餘-50)", "方案 C：比例削減 (全體 Pts 物理削減 -10%)"])
+                    if st.button("🚨 執行削減"):
                         if "方案 A" in scheme: conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 150) WHERE player_id != '330999'")
                         elif "方案 B" in scheme:
                             conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 200) WHERE hero_points >= 2501 AND player_id != '330999'")
@@ -443,14 +436,10 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     if st.button("🔥 核銷銷帳", type="primary"):
                         p_chk = conn.execute("SELECT player_id, prize_name, status FROM Prizes WHERE id=?", (sid_v,)).fetchone()
                         if p_chk and p_chk[2] == '待兌換':
-                            prize_name, player_id = p_chk[1], p_chk[0]
-                            p_val = (conn.execute("SELECT item_value FROM Inventory WHERE item_name = ?", (prize_name,)).fetchone() or (0,))[0]
-                            can_v = (user_role == "老闆") or (user_role == "店長" and p_val <= 11000) or (user_role == "員工" and p_val <= 3400)
+                            can_v = (user_role == "老闆") or (user_role == "店長") or (user_role == "員工")
                             if can_v:
-                                xp_m = re.search(r'(\d+)\s*(XP|點XP)', prize_name, re.IGNORECASE)
                                 conn.execute("UPDATE Prizes SET status='已核銷' WHERE id=?", (sid_v,))
-                                conn.execute("INSERT INTO Staff_Logs (staff_id, player_id, prize_name, time) VALUES (?,?,?,?)", (st.session_state.player_id, player_id, prize_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                                if xp_m: conn.execute("UPDATE Members SET xp = xp + ? WHERE pf_id = ?", (int(xp_m.group(1)), player_id))
+                                conn.execute("INSERT INTO Staff_Logs (staff_id, player_id, prize_name, time) VALUES (?,?,?,?)", (st.session_state.player_id, p_chk[0], p_chk[1], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
                                 conn.commit(); st.success("✅ 核銷完成！"); time.sleep(1); st.rerun()
                             else: st.error("❌ 權限不足")
                     ldf_v = pd.read_sql_query("SELECT id, staff_id, player_id, prize_name, time FROM Staff_Logs ORDER BY id DESC LIMIT 15", conn)
