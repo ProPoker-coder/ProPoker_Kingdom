@@ -78,24 +78,11 @@ def init_flagship_ui():
             .xp-sub {{ font-size: 1.8em; color: #FF4646; font-weight: bold; margin-top: 5px; }}
             .stats-box {{ font-size: 1.3em; color: #AAAAAA; margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; display: flex; justify-content: space-around; flex-wrap: wrap; gap: 10px; }}
             
-            /* 🏆 榮耀榜與榜單對比強化 (解決 iOS 白色底色問題) */
+            /* 🏆 榜單對比強化 */
             .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; text-shadow: 0 0 15px rgba(255, 215, 0, 0.5); }}
-            
-            /* 強制修改表格顯示，確保 ID 不會隱身 */
-            [data-testid="stTable"] {{
-                background-color: #1a1a1a !important;
-                border-radius: 10px;
-                padding: 10px;
-            }}
-            [data-testid="stTable"] td {{
-                color: #FFFFFF !important;
-                font-weight: bold !important;
-                text-shadow: 1px 1px 2px #000;
-            }}
-            [data-testid="stTable"] th {{
-                color: #FFD700 !important;
-                background-color: #333333 !important;
-            }}
+            [data-testid="stTable"] {{ background-color: #1a1a1a !important; border-radius: 10px; padding: 10px; }}
+            [data-testid="stTable"] td {{ color: #FFFFFF !important; font-weight: bold !important; text-shadow: 1px 1px 2px #000; }}
+            [data-testid="stTable"] th {{ color: #FFD700 !important; background-color: #333333 !important; }}
 
             .gold-medal {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000 !important; padding: 15px; border-radius: 15px; font-weight: 900; text-align: center; margin-bottom: 10px; box-shadow: 0 0 20px rgba(255,215,0,0.8); font-size: 1.4em; }}
             .silver-medal {{ background: linear-gradient(45deg, #C0C0C0, #E8E8E8); color: #000 !important; padding: 12px; border-radius: 12px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.2em; }}
@@ -138,26 +125,48 @@ def get_rank_v2500(pts):
 
 init_db(); init_flagship_ui()
 
-# --- 3. 認證系統 ---
-if "player_id" not in st.session_state: st.session_state.player_id = None
-if "access_level" not in st.session_state: st.session_state.access_level = "玩家"
+# --- 3. 身份永續存根系統 (物理對位網址參數) ---
+if "player_id" not in st.session_state:
+    # 物理檢測網址是否有殘留身份
+    query_params = st.query_params
+    if "auth_token" in query_params:
+        token_id = query_params["auth_token"]
+        conn = sqlite3.connect('poker_data.db')
+        u_auto = conn.execute("SELECT role FROM Members WHERE pf_id = ?", (token_id,)).fetchone()
+        conn.close()
+        if u_auto:
+            st.session_state.player_id = token_id
+            st.session_state.access_level = u_auto[0]
+    else:
+        st.session_state.player_id = None
+        st.session_state.access_level = "玩家"
 
 with st.sidebar:
     st.title("🛡️ 認證總部")
-    p_id = st.text_input("POKERFANS ID", value=st.session_state.player_id if st.session_state.player_id else "")
+    p_id_input = st.text_input("POKERFANS ID", value=st.session_state.player_id if st.session_state.player_id else "")
     conn = sqlite3.connect('poker_data.db')
-    u_chk = conn.execute("SELECT role, password FROM Members WHERE pf_id = ?", (p_id,)).fetchone()
+    u_chk = conn.execute("SELECT role, password FROM Members WHERE pf_id = ?", (p_id_input,)).fetchone()
     invite_cfg = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'reg_invite_code'").fetchone() or ("888",))[0]
     conn.close()
-    if p_id and u_chk:
+    
+    if p_id_input and u_chk:
         if st.text_input("密碼", type="password", key="login_pw") == u_chk[1]:
-            if st.button("啟動系統"): st.session_state.player_id, st.session_state.access_level = p_id, u_chk[0]; st.rerun()
-    elif p_id:
+            if st.button("啟動系統"): 
+                st.session_state.player_id = p_id_input
+                st.session_state.access_level = u_chk[0]
+                # 物理打入網址鋼印，實現刷新不掉線
+                st.query_params["auth_token"] = p_id_input
+                st.rerun()
+    elif p_id_input:
         with st.form("reg"):
             rn, rpw, ri = st.text_input("暱稱"), st.text_input("密碼", type="password"), st.text_input("邀請碼")
             if st.form_submit_button("物理註冊") and ri == invite_cfg:
-                cr = sqlite3.connect('poker_data.db'); cr.execute("INSERT INTO Members (pf_id, name, role, xp, password) VALUES (?,?,?,?,?)", (p_id, rn, "玩家", 0, rpw)); cr.commit(); cr.close(); st.success("註冊成功！")
-    if st.button("退出王國"): st.session_state.player_id = None; st.rerun()
+                cr = sqlite3.connect('poker_data.db'); cr.execute("INSERT INTO Members (pf_id, name, role, xp, password) VALUES (?,?,?,?,?)", (p_id_input, rn, "玩家", 0, rpw)); cr.commit(); cr.close(); st.success("註冊成功！")
+    
+    if st.button("退出王國"): 
+        st.session_state.player_id = None
+        st.query_params.clear() # 物理清除鋼印
+        st.rerun()
 
 if not st.session_state.player_id:
     st.markdown(f"""
@@ -180,7 +189,7 @@ if not st.session_state.player_id:
         </div>
     """, unsafe_allow_html=True); st.stop()
 
-# --- 4. 玩家主介面 ---
+# --- 4. 玩家主介面 (全量代碼焊接) ---
 conn = sqlite3.connect('poker_data.db')
 curr_m = datetime.now().strftime("%m")
 t_p = st.tabs(["🪪 會員卡", "🎰 轉盤抽獎", "⚔️ 軍火清冊", "🏆 榮耀榜"])
@@ -254,7 +263,6 @@ with t_p[3]:
         ldf = pd.read_sql_query("SELECT player_id as ID, hero_points FROM Leaderboard WHERE ID != '330999' ORDER BY hero_points DESC LIMIT 20", conn)
         if not ldf.empty: 
             ldf['榮耀牌位'] = ldf['hero_points'].apply(get_rank_v2500)
-            # 使用表單格式展示，確保背景深色
             st.table(ldf[['ID', '榮耀牌位']])
     with rk2:
         st.markdown(f'<div class="glory-title">🔥 {curr_m}月 巔峰戰力榜</div>', unsafe_allow_html=True)
@@ -275,7 +283,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
     st.write("---"); st.header("⚙️ 王國指揮部")
     mt = st.tabs(["📁 精算", "📦 物資", "🚀 空投", "📢 視覺", "🎯 任命", "🗑️ 結算", "📜 核銷", "💾 備份"])
 
-    with mt[0]:
+    with mt[0]: # 📁 精算
         up = st.file_uploader("上傳報表 (CSV)", type="csv")
         if up and st.button("🚀 執行精算"):
             df_c = pd.read_csv(up); df_c.columns = df_c.columns.str.strip(); conn_c = sqlite3.connect('poker_data.db')
@@ -295,14 +303,14 @@ if st.session_state.access_level in ["老闆", "店長"]:
                     conn_c.execute("INSERT OR IGNORE INTO Monthly_God (player_id) VALUES (?)", (pid,))
                     conn_c.execute("UPDATE Monthly_God SET monthly_points = monthly_points + ? WHERE player_id = ?", (pts_g, pid))
                 conn_c.execute("INSERT INTO Import_History VALUES (?,?)", (up.name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                conn_c.commit(); st.success("精算對位完成")
+                conn_c.commit(); st.success("精算完成")
             conn_c.close()
 
-    with mt[1]: # 物資管理 (XP 資格門檻對位)
+    with mt[1]: # 📦 物資
         with st.form("ni"):
             nn, nv, ns, nw = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0)
             n_mx = st.number_input("XP 抽獎資格門檻", 0)
-            img_url_input = st.text_input("圖片網路連結 (http/https)")
+            img_url_input = st.text_input("圖片網路連結")
             if st.form_submit_button("🔨 執行物理上架"):
                 conn.execute("INSERT OR REPLACE INTO Inventory (item_name, stock, item_value, weight, img_url, min_xp) VALUES (?,?,?,?,?,?)", (nn, ns, nv, nw, img_url_input, n_mx))
                 conn.commit(); st.success("上架成功！"); st.rerun()
@@ -311,11 +319,10 @@ if st.session_state.access_level in ["老闆", "店長"]:
             with st.expander(f"📦 管理：{ri['item_name']}"):
                 eq, ew = st.number_input("補貨", 0, key=f"q_{ri['item_name']}"), st.number_input("權重", value=ri['weight'], key=f"w_{ri['item_name']}")
                 new_url = st.text_input("更新圖片連結", value=ri['img_url'], key=f"url_{ri['item_name']}")
-                new_min_xp = st.number_input("更新 XP 資格門檻", value=int(ri['min_xp']), key=f"mx_{ri['item_name']}")
+                new_min_xp = st.number_input("更新 XP 門檻", value=int(ri['min_xp']), key=f"mx_{ri['item_name']}")
                 if st.button("💾 更新", key=f"u_{ri['item_name']}"): 
                     conn.execute("UPDATE Inventory SET stock=stock+?, weight=?, img_url=?, min_xp=? WHERE item_name=?", (eq, ew, new_url, new_min_xp, ri['item_name']))
                     conn.commit(); st.success("更新成功"); st.rerun()
-                if st.button("🗑️ 下架", key=f"d_{ri['item_name']}"): conn.execute("DELETE FROM Inventory WHERE item_name=?", (ri['item_name'],)); conn.commit(); st.rerun()
 
     with mt[2]: # 🚀 空投
         tid = st.text_input("目標玩家 ID (空為全服)"); val = st.number_input("XP 數額", 0)
@@ -324,16 +331,14 @@ if st.session_state.access_level in ["老闆", "店長"]:
             else: conn.execute("UPDATE Members SET xp_temp = xp_temp + ? WHERE pf_id = ?", (val, tid))
             conn.commit(); st.success("成功")
 
-    with mt[3]: # 📢 視覺與活動開關
+    with mt[3]: # 📢 視覺
         ns_v = st.slider("跑馬燈速度", 5, 60, 35); ic_v = st.text_input("註冊邀請碼", "888")
         txt_v = st.text_area("公告內容"); bg_v = st.text_input("背景 URL")
         curr_act = (conn.execute("SELECT config_value FROM System_Settings WHERE config_key = 'monthly_active'").fetchone() or ("ON",))[0]
-        st.write(f"當前月榜狀態: **{'🟢 已開啟' if curr_act=='ON' else '🔴 已關閉'}**")
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            if st.button("🔓 開啟月榜"): conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('monthly_active', 'ON')"); conn.commit(); st.rerun()
-        with col_act2:
-            if st.button("🔒 關閉月榜"): conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('monthly_active', 'OFF')"); conn.commit(); st.rerun()
+        if st.button("🔓 開啟/🔒 關閉月榜"):
+            new_act = "OFF" if curr_act == "ON" else "ON"
+            conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('monthly_active', ?)", (new_act,))
+            conn.commit(); st.rerun()
         if st.button("💾 保存設定"):
             conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_speed',?),('reg_invite_code',?),('marquee_text',?)", (str(ns_v), ic_v, txt_v))
             if bg_v: conn.execute("INSERT OR REPLACE INTO System_Settings VALUES ('welcome_bg_url',?)", (bg_v,))
@@ -350,34 +355,33 @@ if st.session_state.access_level in ["老闆", "店長"]:
             if st.button("⚖️ 英雄規費削減"): conn.execute("UPDATE Leaderboard SET hero_points = MAX(0, hero_points - 150)"); conn.commit(); st.success("完成")
             if st.button("🔥 粉碎月榜"): conn.execute("DELETE FROM Monthly_God"); conn.commit(); st.rerun()
             if st.button("💀 粉碎總榜"): conn.execute("DELETE FROM Leaderboard WHERE player_id != '330999'"); conn.commit(); st.rerun()
-        else: st.warning("⚖️ 結算權限僅限老闆本人。")
 
-    with mt[6]: # 📜 核銷
+    with mt[6]: # 📜 核銷 (含自動入帳)
         sid_v = st.number_input("輸入序號 ID", value=0, step=1)
         if st.button("🔥 核銷銷帳", type="primary"):
             p_chk = conn.execute("SELECT player_id, prize_name, status FROM Prizes WHERE id=?", (sid_v,)).fetchone()
-            if not p_chk: st.error("❌ 查無序號")
-            elif p_chk[2] == '已核銷': st.warning("⚠️ 已核銷")
-            else:
+            if p_chk and p_chk[2] == '待兌換':
+                prize_name, player_id = p_chk[1], p_chk[0]
+                xp_match = re.search(r'(\d+)\s*(XP|點XP)', prize_name, re.IGNORECASE)
                 conn.execute("UPDATE Prizes SET status='已核銷' WHERE id=?", (sid_v,))
-                conn.execute("INSERT INTO Staff_Logs (staff_id, player_id, prize_name, time) VALUES (?,?,?,?)", (st.session_state.player_id, p_chk[0], p_chk[1], datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                conn.commit(); st.success("✅ 核銷完成"); st.rerun()
+                conn.execute("INSERT INTO Staff_Logs (staff_id, player_id, prize_name, time) VALUES (?,?,?,?)", (st.session_state.player_id, player_id, prize_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                if xp_match:
+                    xp_val = int(xp_match.group(1))
+                    conn.execute("UPDATE Members SET xp_temp = xp_temp + ? WHERE pf_id = ?", (xp_val, player_id))
+                    st.success(f"✅ 核銷完成並入帳 {xp_val} XP！")
+                else: st.success("✅ 核銷完成")
+                conn.commit(); time.sleep(1); st.rerun()
         ldf_v = pd.read_sql_query("SELECT id, staff_id, player_id, prize_name, time FROM Staff_Logs ORDER BY id DESC LIMIT 15", conn)
         for _, rv in ldf_v.iterrows():
-            c_a, c_b = st.columns([5, 1])
-            with c_a: st.markdown(f'<div style="color:white; font-size:0.9em;">[{rv["time"]}] {rv["staff_id"]} 核銷 {rv["player_id"]} 的 {rv["prize_name"]}</div>', unsafe_allow_html=True)
-            with c_b:
-                if st.session_state.access_level == "老闆" and st.button("🗑️", key=f"ld_{rv['id']}"):
-                    conn.execute("DELETE FROM Staff_Logs WHERE id=?", (rv['id'],)); conn.commit(); st.rerun()
+            st.markdown(f'<div style="color:white; font-size:0.9em;">[{rv["time"]}] {rv["staff_id"]} 核銷 {rv["player_id"]} 的 {rv["prize_name"]}</div>', unsafe_allow_html=True)
 
-    with mt[7]: # 💾 備份 (店長權限解放)
+    with mt[7]: # 💾 備份 (店長解鎖)
         if os.path.exists('poker_data.db'):
-            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載物理 DB", f, "Backup.db")
-        
+            with open('poker_data.db', 'rb') as f: st.download_button("📥 下載 DB", f, "Backup.db")
         if st.session_state.access_level == "老闆":
-            rf = st.file_uploader("數據還原", type="db")
-            if rf and st.button("🚨 強制物理還原"):
+            rf = st.file_uploader("還原", type="db")
+            if rf and st.button("🚨 強制還原"):
                 with open('poker_data.db', 'wb') as f: f.write(rf.getbuffer())
-                st.success("數據已物理還原！"); time.sleep(1); st.rerun()
+                st.success("數據還原成功！"); st.rerun()
 
 conn.close()
