@@ -10,7 +10,7 @@ import base64
 from datetime import datetime, timedelta
 
 # --- 0. 系統核心配置 ---
-st.set_page_config(page_title="PRO POKER 黑金王國", page_icon="🃏", layout="wide")
+st.set_page_config(page_title="PRO POKER 撲洛王國", page_icon="🃏", layout="wide")
 
 # --- 1. 旗艦視覺系統物理焊接 (100% 全量展開) ---
 def init_flagship_ui():
@@ -18,7 +18,7 @@ def init_flagship_ui():
     c = conn.cursor()
     m_spd = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_speed'").fetchone() or ("35",))[0]
     m_bg = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'welcome_bg_url'").fetchone() or ("https://img.freepik.com/free-photo/poker-table-dark-atmosphere_23-2151003784.jpg",))[0]
-    m_txt = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_text'").fetchone() or ("黑金王國營運中，歡迎回歸領地！",))[0]
+    m_txt = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_text'").fetchone() or ("撲洛王國營運中，歡迎回歸領地！",))[0]
     conn.close()
     
     st.markdown(f"""
@@ -111,13 +111,14 @@ with st.sidebar:
     if st.button("退出王國"): st.session_state.player_id = None; st.rerun()
 
 if not st.session_state.player_id:
+    # --- 【物理更正：入口網站標題說明焊死】 ---
     st.markdown(f"""
         <div class="welcome-wall">
             <div class="welcome-title">PRO POKER</div>
-            <div class="welcome-subtitle">撲 克 傳 奇 殿 堂</div>
+            <div class="welcome-subtitle">撲 洛 傳 奇 殿 堂</div>
             <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🧧 領主認證通道</b><br>輸入 POKERFANS ID 通過邀請碼驗證即可加入王國領地。</div>
-            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🎰 幸運獎項抽取</b><br>參與比賽累積 XP，物理抽取實體精美物資。</div>
-            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🛡️ 黑金物理核銷</b><br>物資由指揮部精確辨識序號有效性，保障獲獎權益。</div>
+            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🎰 幸運轉盤抽抽樂</b><br>打牌賺XP簽到領紅利 大獎爆不完</div>
+            <div class="feature-box"><b style="color:#FFD700; font-size:1.2em;">🛡️ 菁英榜單</b><br>尊榮排行彰顯不凡身價 提升段位可增加抽獎幸運值</div>
             <p style="margin-top:40px; color:#AAA;">請在側邊欄登入以啟動殿堂功能</p>
         </div>
     """, unsafe_allow_html=True); st.stop()
@@ -142,10 +143,16 @@ with t_p[0]:
         </div>
         <p style="color:gold; font-size:1.8em; margin-top:20px;">{get_rank_v2500(h_pts)}</p>
     </div>''', unsafe_allow_html=True)
+    
     if st.button("🎰 幸運簽到"):
-        conn.execute("UPDATE Members SET xp_temp = xp_temp + 10 WHERE pf_id = ?", (st.session_state.player_id,))
-        conn.commit(); st.rerun()
-    st.write("---"); st.markdown("#### 🎫 我的獲獎序號 (已核銷可刪除)"); myp = pd.read_sql_query("SELECT id, prize_name, status FROM Prizes WHERE player_id=? ORDER BY id DESC", conn, params=(st.session_state.player_id,))
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if u_row['last_checkin'] == today_str:
+            st.warning("⚠️ 今日已完成簽到，明天請早！")
+        else:
+            conn.execute("UPDATE Members SET xp_temp = xp_temp + 10, last_checkin = ? WHERE pf_id = ?", (today_str, st.session_state.player_id))
+            conn.commit(); st.success("✅ 簽到成功！紅利 XP +10"); time.sleep(1); st.rerun()
+
+    st.write("---"); st.markdown("#### 🎫 我的獲獎序號 (請至櫃台兌換)"); myp = pd.read_sql_query("SELECT id, prize_name, status FROM Prizes WHERE player_id=? ORDER BY id DESC", conn, params=(st.session_state.player_id,))
     for _, r in myp.iterrows():
         ca, cb = st.columns([4, 1])
         with ca: st.write(f"序號: {r['id']} | **{r['prize_name']}** | {r['status']}")
@@ -170,12 +177,11 @@ with t_p[1]:
         else: st.warning("XP 不足")
 
 with t_p[2]:
-    st.subheader("⚔️ 黑金殿堂：物資清冊展示")
+    st.subheader("⚔️ 撲洛殿堂：物資清冊展示")
     gun_df = pd.read_sql_query("SELECT * FROM Inventory WHERE stock > 0 ORDER BY item_value DESC", conn)
     cols = st.columns(3)
     for idx, row in gun_df.iterrows():
         with cols[idx % 3]:
-            # 物理對位網路圖片，若無圖片則使用預設圖
             img_src = row['img_url'] if row['img_url'] and row['img_url'].startswith('http') else "https://img.freepik.com/free-vector/modern-poker-chips-background_23-2147883740.jpg"
             st.markdown(f'''<div style="background:#111; border:1px solid #444; border-radius:15px; padding:10px; text-align:center;">
                 <img src="{img_src}" style="width:100%; border-radius:10px; height:150px; object-fit:contain; background:#000;">
@@ -232,7 +238,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
                 conn_c.commit(); st.success("精算對位完成")
             conn_c.close()
 
-    with mt[1]: # --- 【物理修正：網路圖空連結】 ---
+    with mt[1]: # 物資管理
         with st.form("ni"):
             nn, nv, ns, nw, n_mx = st.text_input("物資名"), st.number_input("價值", 0), st.number_input("庫存", 0), st.number_input("權重", 10.0), st.number_input("門檻", 0)
             img_url_input = st.text_input("圖片網路連結 (http/https)")
@@ -294,7 +300,7 @@ if st.session_state.access_level in ["老闆", "店長"]:
         for _, rv in ldf_v.iterrows():
             c_a, c_b = st.columns([5, 1])
             with c_a: st.write(f"[{rv['time']}] {rv['staff_id']} 核銷 {rv['player_id']} 的 {rv['prize_name']}")
-            with cb:
+            with c_b:
                 if st.session_state.access_level == "老闆" and st.button("🗑️", key=f"ld_{rv['id']}"):
                     conn.execute("DELETE FROM Staff_Logs WHERE id=?", (rv['id'],)); conn.commit(); st.rerun()
 
