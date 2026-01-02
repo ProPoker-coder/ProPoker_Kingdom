@@ -1250,7 +1250,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
     
     with tabs[0]: 
         with tabs[0]: 
-        st.subheader("🛂 櫃台核銷")
+            st.subheader("🛂 櫃台核銷")
         target = st.text_input("玩家 ID")
         if target:
             # --- 修改開始: 分開查詢以避免關聯錯誤 ---
