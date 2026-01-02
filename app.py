@@ -1249,22 +1249,39 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
     tabs = st.tabs(["💰 櫃台與物資", "👥 人員與空投", "📊 賽事與數據", "🛠️ 系統與維護"])
     
     with tabs[0]: 
+        with tabs[0]: 
         st.subheader("🛂 櫃台核銷")
         target = st.text_input("玩家 ID")
         if target:
-            # Join Prizes and Inventory
-            pend_res = supabase.table("Prizes").select("id, prize_name, Inventory(item_value, vip_card_level, vip_card_hours)").eq("player_id", target).eq("status", "待兌換").execute()
+            # --- 修改開始: 分開查詢以避免關聯錯誤 ---
+            # 1. 先抓取該玩家待兌換的獎品
+            pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
+            prizes_data = pend_res.data
             
-            # Formatting data for display
             display_data = []
-            for p in pend_res.data:
-                inv = p['Inventory'] if p['Inventory'] else {}
-                display_data.append({
-                    "id": p['id'], "prize_name": p['prize_name'], 
-                    "item_value": inv.get('item_value', 0),
-                    "vip_level": inv.get('vip_card_level', 0),
-                    "vip_hours": inv.get('vip_card_hours', 0)
-                })
+            if prizes_data:
+                # 2. 收集所有出現的獎品名稱
+                p_names = list(set([p['prize_name'] for p in prizes_data]))
+                
+                # 3. 去 Inventory 查詢這些物品的詳細數值 (XP 獎勵會查不到，沒關係)
+                inv_res = supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names).execute()
+                # 轉成字典方便對照: {"倚天劍": {data...}, ...}
+                inv_map = {i['item_name']: i for i in inv_res.data}
+                
+                # 4. 合併資料
+                for p in prizes_data:
+                    p_name = p['prize_name']
+                    # 如果是物品，就抓數值；如果是 XP，就給預設值 0
+                    inv_info = inv_map.get(p_name, {}) 
+                    
+                    display_data.append({
+                        "id": p['id'], 
+                        "prize_name": p_name, 
+                        "item_value": inv_info.get('item_value', 0),
+                        "vip_level": inv_info.get('vip_card_level', 0),
+                        "vip_hours": inv_info.get('vip_card_hours', 0)
+                    })
+            # --- 修改結束 ---
             
             if display_data:
                 df_pend = pd.DataFrame(display_data)
@@ -1274,6 +1291,39 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 
                 selected_item = next((x for x in display_data if x['id'] == redeem_id), None)
                 
+                if user_role != "老闆" and selected_item['item_value'] > max_val:
+                    st.error(f"❌ 此物品價值 ({selected_item['item_value']}) 超過權限，請聯繫老闆。")
+                else:
+                    if st.button("確認核銷 (自動入帳)"):
+                        # VIP Logic
+                        if selected_item['vip_hours'] > 0:
+                            mem = supabase.table("Members").select("vip_level, vip_expiry").eq("pf_id", target).execute().data[0]
+                            c_lvl = mem.get('vip_level', 0)
+                            c_exp = mem.get('vip_expiry')
+                            now = datetime.now(); start_time = now
+                            
+                            if c_lvl == selected_item['vip_level'] and c_exp:
+                                try:
+                                    exp_dt = datetime.strptime(str(c_exp).split('.')[0], "%Y-%m-%d %H:%M:%S")
+                                    if exp_dt > now: start_time = exp_dt
+                                except: pass
+                            
+                            new_exp = (start_time + timedelta(hours=int(selected_item['vip_hours']))).strftime("%Y-%m-%d %H:%M:%S")
+                            supabase.table("Members").update({"vip_level": int(selected_item['vip_level']), "vip_expiry": new_exp}).eq("pf_id", target).execute()
+                            st.toast(f"💎 VIP 權益已開通至 {new_exp}")
+
+                        # XP Card Logic
+                        xp_match = re.search(r'(\d+)\s*XP', str(selected_item['prize_name']), re.IGNORECASE)
+                        if xp_match:
+                            add_xp = int(xp_match.group(1))
+                            cur_xp = supabase.table("Members").select("xp").eq("pf_id", target).execute().data[0]['xp']
+                            supabase.table("Members").update({"xp": cur_xp + add_xp}).eq("pf_id", target).execute()
+                            st.toast(f"💰 已自動儲值 {add_xp} XP")
+                        
+                        supabase.table("Prizes").update({"status": '已核銷'}).eq("id", redeem_id).execute()
+                        supabase.table("Staff_Logs").insert({"staff_id": st.session_state.player_id, "player_id": target, "prize_name": selected_item['prize_name'], "time": datetime.now().isoformat()}).execute()
+                        st.success("核銷作業完成！"); time.sleep(1); st.rerun()
+            else: st.info("該玩家無待核銷物品")
                 if user_role != "老闆" and selected_item['item_value'] > max_val:
                     st.error(f"❌ 此物品價值 ({selected_item['item_value']}) 超過權限，請聯繫老闆。")
                 else:
