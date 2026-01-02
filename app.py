@@ -1249,48 +1249,48 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
     tabs = st.tabs(["💰 櫃台與物資", "👥 人員與空投", "📊 賽事與數據", "🛠️ 系統與維護"])
     
     with tabs[0]: 
-        with tabs[0]: 
+            with tabs[0]: 
             st.subheader("🛂 櫃台核銷")
-        target = st.text_input("玩家 ID")
-        if target:
-            # --- 修改開始: 分開查詢以避免關聯錯誤 ---
-            # 1. 先抓取該玩家待兌換的獎品
-            pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
-            prizes_data = pend_res.data
-            
-            display_data = []
-            if prizes_data:
-                # 2. 收集所有出現的獎品名稱
-                p_names = list(set([p['prize_name'] for p in prizes_data]))
+            target = st.text_input("玩家 ID")
+            if target:
+                # --- 修改開始: 分開查詢以避免關聯錯誤 ---
+                # 1. 先抓取該玩家待兌換的獎品
+                pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
+                prizes_data = pend_res.data
                 
-                # 3. 去 Inventory 查詢這些物品的詳細數值 (XP 獎勵會查不到，沒關係)
-                inv_res = supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names).execute()
-                # 轉成字典方便對照: {"倚天劍": {data...}, ...}
-                inv_map = {i['item_name']: i for i in inv_res.data}
-                
-                # 4. 合併資料
-                for p in prizes_data:
-                    p_name = p['prize_name']
-                    # 如果是物品，就抓數值；如果是 XP，就給預設值 0
-                    inv_info = inv_map.get(p_name, {}) 
+                display_data = []
+                if prizes_data:
+                    # 2. 收集所有出現的獎品名稱
+                    p_names = list(set([p['prize_name'] for p in prizes_data]))
                     
-                    display_data.append({
-                        "id": p['id'], 
-                        "prize_name": p_name, 
-                        "item_value": inv_info.get('item_value', 0),
-                        "vip_level": inv_info.get('vip_card_level', 0),
-                        "vip_hours": inv_info.get('vip_card_hours', 0)
-                    })
-            # --- 修改結束 ---
-            
-            if display_data:
-                df_pend = pd.DataFrame(display_data)
-                st.table(df_pend)
-                redeem_id = st.selectbox("選擇核銷項目 ID", df_pend['id'].tolist())
-                max_val = int(get_config('max_redeem_val', "1000000"))
+                    # 3. 去 Inventory 查詢這些物品的詳細數值 (XP 獎勵會查不到，沒關係)
+                    inv_res = supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names).execute()
+                    # 轉成字典方便對照: {"倚天劍": {data...}, ...}
+                    inv_map = {i['item_name']: i for i in inv_res.data}
+                    
+                    # 4. 合併資料
+                    for p in prizes_data:
+                        p_name = p['prize_name']
+                        # 如果是物品，就抓數值；如果是 XP，就給預設值 0
+                        inv_info = inv_map.get(p_name, {}) 
+                        
+                        display_data.append({
+                            "id": p['id'], 
+                            "prize_name": p_name, 
+                            "item_value": inv_info.get('item_value', 0),
+                            "vip_level": inv_info.get('vip_card_level', 0),
+                            "vip_hours": inv_info.get('vip_card_hours', 0)
+                        })
+                # --- 修改結束 ---
                 
-                selected_item = next((x for x in display_data if x['id'] == redeem_id), None)
-                
+                if display_data:
+                    df_pend = pd.DataFrame(display_data)
+                    st.table(df_pend)
+                    redeem_id = st.selectbox("選擇核銷項目 ID", df_pend['id'].tolist())
+                    max_val = int(get_config('max_redeem_val', "1000000"))
+                    
+                    selected_item = next((x for x in display_data if x['id'] == redeem_id), None)
+                    
                 if user_role != "老闆" and selected_item['item_value'] > max_val:
                     st.error(f"❌ 此物品價值 ({selected_item['item_value']}) 超過權限，請聯繫老闆。")
                 else:
