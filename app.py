@@ -39,6 +39,10 @@ def init_flagship_ui():
         m_mode = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_mode'").fetchone() or ("custom",))[0]
         m_txt = (c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_text'").fetchone() or ("撲洛王國營運中，歡迎回歸領地！",))[0]
         
+        # [NEW] Check-in Settings Defaults
+        ci_min = int((c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'checkin_min'").fetchone() or ("10",))[0])
+        ci_max = int((c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'checkin_max'").fetchone() or ("500",))[0])
+
         if m_mode == 'auto':
             try:
                 th_xp = int((c.execute("SELECT config_value FROM System_Settings WHERE config_key = 'marquee_th_xp'").fetchone() or ("5000",))[0])
@@ -162,7 +166,7 @@ def init_flagship_ui():
         </style>
         <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
     """, unsafe_allow_html=True)
-    return m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode
+    return m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode, ci_min, ci_max
 
 # --- 2. 資料庫核心 ---
 def init_db():
@@ -399,8 +403,8 @@ def log_game_transaction(player_id, game, action, amount):
 
 # --- Init ---
 init_db()
-# [FIXED] Unpack m_spd and m_mode
-m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode = init_flagship_ui()
+# [FIXED] Unpack m_spd and m_mode and checkin settings
+m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode, ci_min, ci_max = init_flagship_ui()
 
 # --- Auth ---
 if "player_id" not in st.session_state:
@@ -410,23 +414,13 @@ if "player_id" not in st.session_state:
 try:
     tk = st.query_params.get("token")
     if tk and st.session_state.player_id is None:
-        with sqlite3.connect('poker_data.db') as conn:
-            u = conn.execute("SELECT role, ban_until FROM Members WHERE pf_id = ?", (str(tk),)).fetchone()
-        if u:
-            is_banned = False
-            if u[1]:
-                try:
-                    ban_str = str(u[1]).split('.')[0]
-                    ban_time = datetime.strptime(ban_str, "%Y-%m-%d %H:%M:%S")
-                    if datetime.now() < ban_time: is_banned = True
-                except: pass
-            if is_banned: st.error(f"🚫 此帳號已被封禁，解封時間：{u[1]}"); st.stop()
-            else: st.session_state.player_id = tk; st.session_state.access_level = u[0]
+        # [FIXED] Only use token to pre-fill ID input, NO AUTO LOGIN
+        st.session_state.prefill_id = tk
 except: pass
 
 with st.sidebar:
     st.title("🛡️ 認證總部")
-    cur_id = st.session_state.player_id if st.session_state.player_id else ""
+    cur_id = st.session_state.get('prefill_id', "")
     p_id_input = st.text_input("POKERFANS ID", value=cur_id)
     
     u_chk = None
@@ -448,7 +442,7 @@ with st.sidebar:
             login_pw = st.text_input("密碼", type="password", key="sidebar_pw")
             if st.button("登入Pro撲克殿堂"):
                 if login_pw == u_chk[1]:
-                    st.session_state.player_id = p_id_input; st.session_state.access_level = u_chk[0]; st.query_params["token"] = p_id_input; st.rerun()
+                    st.session_state.player_id = p_id_input; st.session_state.access_level = u_chk[0]; st.rerun()
                 else: st.error("❌ 密碼錯誤")
     elif p_id_input:
         with st.form("reg_sidebar"):
@@ -562,10 +556,16 @@ with t_p[0]: # 排位卡
         today = datetime.now().strftime("%Y-%m-%d")
         if str(u_row['last_checkin']).startswith(today): st.warning("⚠️ 已簽到")
         else:
+            # [NEW] Weighted Check-in Reward
+            rand_factor = random.random() ** 3 
+            reward = int(ci_min + (ci_max - ci_min) * rand_factor)
+            
             with sqlite3.connect('poker_data.db') as tx_conn:
-                tx_conn.execute("UPDATE Members SET xp_temp = xp_temp + 10, last_checkin = ? WHERE pf_id = ?", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), st.session_state.player_id))
+                tx_conn.execute("UPDATE Members SET xp = xp + ?, xp_temp = xp_temp + 10, last_checkin = ? WHERE pf_id = ?", (reward, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), st.session_state.player_id))
+                tx_conn.execute("INSERT INTO Prizes (player_id, prize_name, status, time, expire_at, source) VALUES (?, ?, '自動入帳', ?, ?, ?)", (st.session_state.player_id, f"{reward} XP", datetime.now(), "無期限", "DailyCheckIn"))
                 tx_conn.commit()
-            st.success("✅ 簽到成功！"); time.sleep(1); st.rerun()
+            st.success(f"✅ 簽到成功！獲得 {reward} XP + 10 紅利"); time.sleep(1); st.rerun()
+
     with st.expander("🔐 安全中心：修改密碼"):
         new_pw = st.text_input("輸入新密碼", type="password", key="reset_pw_box")
         if st.button("⚡ 執行鋼印替換") and new_pw:
@@ -681,10 +681,15 @@ with t_p[2]: # 🎮 遊戲大廳
             
             if st.session_state.mines_active:
                 cur_win = int(st.session_state.mines_bet_amt * st.session_state.mines_multiplier)
-                st.info(f"🔥 當前倍率: {st.session_state.mines_multiplier:.2f}x | 💰 預期獲利: {cur_win} XP")
+                c_info, c_cash = st.columns([2, 1])
+                c_info.info(f"🔥 倍率: {st.session_state.mines_multiplier:.2f}x | 💰 預期: {cur_win}")
+                if c_cash.button("💰 結算", type="primary", use_container_width=True):
+                    with sqlite3.connect('poker_data.db') as tx_conn:
+                        tx_conn.execute("UPDATE Members SET xp=xp+? WHERE pf_id=?", (cur_win, st.session_state.player_id)); tx_conn.commit()
+                    st.session_state.mines_active=False; st.balloons(); st.success(f"贏得 {cur_win} XP"); st.rerun()
 
             if not st.session_state.mines_active and not st.session_state.mines_game_over:
-                if st.button("🚀 開始"):
+                if st.button("🚀 開始遊戲", type="primary", use_container_width=True):
                      if u_row['xp']>=mine_bet:
                          with sqlite3.connect('poker_data.db') as tx_conn:
                              tx_conn.execute("UPDATE Members SET xp=xp-? WHERE pf_id=?", (mine_bet, st.session_state.player_id)); tx_conn.commit()
@@ -698,43 +703,41 @@ with t_p[2]: # 🎮 遊戲大廳
                          st.rerun()
                      else: st.error("XP 不足")
             
-            cols = st.columns(5)
-            if len(st.session_state.mines_revealed) == 25: 
-                for i in range(25):
-                    with cols[i%5]:
-                        if st.session_state.mines_revealed[i]:
-                            if st.session_state.mines_grid[i] == 1: st.error("💥")
-                            else: st.success("💎")
-                        else:
-                            if not st.session_state.mines_game_over and st.session_state.mines_active:
-                                if st.button("❓", key=f"m_{i}"):
-                                    st.session_state.mines_revealed[i]=True
-                                    if st.session_state.mines_grid[i]: 
-                                        st.session_state.mines_active=False
-                                        st.session_state.mines_game_over=True
-                                        st.session_state.mines_revealed = [True]*25
-                                        st.rerun()
-                                    else: 
-                                        n_revealed = sum(1 for x in range(25) if st.session_state.mines_revealed[x] and st.session_state.mines_grid[x]==0)
-                                        try:
-                                            total_comb = math.comb(25, n_revealed)
-                                            safe_comb = math.comb(25 - mine_count, n_revealed)
-                                            if safe_comb > 0:
-                                                st.session_state.mines_multiplier = 0.97 * (total_comb / safe_comb)
-                                        except: pass
-                                        st.rerun()
-                            else: st.button("🔒", key=f"lk_{i}", disabled=True)
-            
             if st.session_state.mines_game_over:
-                st.error("💥 任務失敗！")
-                if st.button("🔄 再來一局"): 
+                 st.error("💥 任務失敗！")
+                 if st.button("🔄 再來一局", use_container_width=True): 
                      st.session_state.mines_game_over=False; st.session_state.mines_active=False; st.rerun()
-            elif st.session_state.mines_active:
-                if st.button("💰 結算領取 (Cashout)"):
-                    win = int(st.session_state.mines_bet_amt * st.session_state.mines_multiplier)
-                    with sqlite3.connect('poker_data.db') as tx_conn:
-                        tx_conn.execute("UPDATE Members SET xp=xp+? WHERE pf_id=?", (win, st.session_state.player_id)); tx_conn.commit()
-                    st.session_state.mines_active=False; st.balloons(); st.success(f"贏得 {win} XP"); st.rerun()
+
+            st.write("---")
+            cols = st.columns(5)
+            for i in range(25):
+                with cols[i%5]:
+                    label = "❓"
+                    disabled = False
+                    if st.session_state.mines_revealed[i]:
+                        disabled = True
+                        if st.session_state.mines_grid[i] == 1: label = "💥"
+                        else: label = "💎"
+                    elif st.session_state.mines_game_over:
+                         disabled = True
+                         if st.session_state.mines_grid[i] == 1: label = "💣"
+                    
+                    if st.button(label, key=f"m_{i}", disabled=disabled, use_container_width=True):
+                        if not st.session_state.mines_game_over and st.session_state.mines_active:
+                            st.session_state.mines_revealed[i]=True
+                            if st.session_state.mines_grid[i]: 
+                                st.session_state.mines_active=False
+                                st.session_state.mines_game_over=True
+                                st.rerun()
+                            else: 
+                                n_revealed = sum(1 for x in range(25) if st.session_state.mines_revealed[x] and st.session_state.mines_grid[x]==0)
+                                try:
+                                    total_comb = math.comb(25, n_revealed)
+                                    safe_comb = math.comb(25 - mine_count, n_revealed)
+                                    if safe_comb > 0:
+                                        st.session_state.mines_multiplier = 0.97 * (total_comb / safe_comb)
+                                except: pass
+                                st.rerun()
 
         # [LOCKED] Wheel Logic
         elif st.session_state.current_game == 'wheel':
@@ -839,7 +842,7 @@ with t_p[2]: # 🎮 遊戲大廳
                 p_val = hand_val(st.session_state.bj_p)
                 d_val = hand_val(st.session_state.bj_d) if st.session_state.bj_game_over else hand_val([st.session_state.bj_d[0]])
                 
-                def render_bj_card(c): return f"<div class='bj-card {'suit-red' if c[1] in ['♥','♦'] else 'suit-black'}'>{c[0]}<br>{c[1]}</div>"
+                def render_bj_card(c): return f"<div class='bj-card {'suit-red' if c in ['♥','♦'] else 'suit-black'}'>{c}</div>"
                 
                 d_html = "".join([f"<div class='bj-card'>{c}</div>" for c in st.session_state.bj_d]) if st.session_state.bj_game_over else f"<div class='bj-card'>{st.session_state.bj_d[0]}</div><div class='bj-card'>?</div>"
                 p_html = "".join([f"<div class='bj-card'>{c}</div>" for c in st.session_state.bj_p])
@@ -882,6 +885,7 @@ with t_p[2]: # 🎮 遊戲大廳
                         if 'bj_paid_flag' in st.session_state: del st.session_state.bj_paid_flag
                         st.rerun()
 
+        # [LOCKED] Roulette Logic - UI REARRANGED FOR MOBILE
         if st.session_state.current_game == 'roulette':
             st.subheader("🔴 俄羅斯輪盤 (Roulette)")
             
@@ -889,6 +893,7 @@ with t_p[2]: # 🎮 遊戲大廳
             hist_str = state[1] if state[1] else ""
             hist_list = hist_str.split(',') if hist_str else []
             
+            # 1. History (Top)
             h_html = "<div class='roulette-history-bar'>"
             for h in hist_list:
                 if h:
@@ -901,46 +906,18 @@ with t_p[2]: # 🎮 遊戲大廳
             if 'roulette_bets' not in st.session_state: st.session_state.roulette_bets = {} 
             if 'roulette_chips' not in st.session_state: st.session_state.roulette_chips = 100
 
-            st.write("🪙 選擇籌碼")
+            # 2. Control Panel (Chips & Spin)
+            st.markdown("##### 🪙 籌碼與操作")
             chips = [100, 500, 1000, 5000, 10000]
             cc = st.columns(len(chips))
             for i, c in enumerate(chips):
                 if cc[i].button(f"{c}", key=f"rc_{c}"): st.session_state.roulette_chips = c
             
-            st.write(f"🎲 當前籌碼: {st.session_state.roulette_chips} | 點擊下方按鈕下注")
-            c1, c2, c3 = st.columns([1,12,1])
-            with c2:
-                if st.button("0 (1:35)", key="rb_0", use_container_width=True): 
-                    st.session_state.roulette_bets["0"] = st.session_state.roulette_bets.get("0", 0) + st.session_state.roulette_chips
-                
-                for row in range(12):
-                    rc1, rc2, rc3 = st.columns(3)
-                    n1, n2, n3 = row*3+1, row*3+2, row*3+3
-                    for n, col in zip([n1,n2,n3], [rc1,rc2,rc3]):
-                         color = "🔴" if n in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "⚫"
-                         if col.button(f"{color} {n}", key=f"rb_{n}", use_container_width=True):
-                             st.session_state.roulette_bets[str(n)] = st.session_state.roulette_bets.get(str(n), 0) + st.session_state.roulette_chips
-                
-                sb1, sb2 = st.columns(2)
-                if sb1.button("🔴 紅色", key="rb_red"): st.session_state.roulette_bets["紅色"] = st.session_state.roulette_bets.get("紅色", 0) + st.session_state.roulette_chips
-                if sb2.button("⚫ 黑色", key="rb_black"): st.session_state.roulette_bets["黑色"] = st.session_state.roulette_bets.get("黑色", 0) + st.session_state.roulette_chips
-                
-                sb3, sb4 = st.columns(2)
-                if sb3.button("單數", key="rb_odd"): st.session_state.roulette_bets["單數"] = st.session_state.roulette_bets.get("單數", 0) + st.session_state.roulette_chips
-                if sb4.button("雙數", key="rb_even"): st.session_state.roulette_bets["雙數"] = st.session_state.roulette_bets.get("雙數", 0) + st.session_state.roulette_chips
-
             total_bet = sum(st.session_state.roulette_bets.values())
-            st.info(f"💰 目前總下注: {total_bet} XP")
-            
-            with st.expander("查看詳細注單"):
-                if st.session_state.roulette_bets:
-                    st.table(pd.DataFrame(list(st.session_state.roulette_bets.items()), columns=["下注目標", "金額"]))
-                else: st.write("尚無下注")
-            
             c_act1, c_act2 = st.columns(2)
-            if c_act1.button("🗑️ 清空"): st.session_state.roulette_bets = {}; st.rerun()
+            c_act1.info(f"💰 總下注: {total_bet} | 籌碼: {st.session_state.roulette_chips}")
             
-            if c_act2.button("🚀 旋轉輪盤 (SPIN)", type="primary"):
+            if c_act2.button("🚀 旋轉 (SPIN)", type="primary", use_container_width=True):
                 if total_bet > 0 and u_row['xp'] >= total_bet:
                     with sqlite3.connect('poker_data.db') as tx_conn:
                         tx_conn.execute("UPDATE Members SET xp = xp - ? WHERE pf_id = ?", (total_bet, st.session_state.player_id))
@@ -1005,6 +982,31 @@ with t_p[2]: # 🎮 遊戲大廳
                     time.sleep(2); st.rerun()
 
                 else: st.error("XP 不足或未下注")
+
+            if st.button("🗑️ 清空下注", use_container_width=True): 
+                st.session_state.roulette_bets = {}; st.rerun()
+
+            # 3. Betting Table (Bottom)
+            c1, c2, c3 = st.columns([1,12,1])
+            with c2:
+                if st.button("0 (1:35)", key="rb_0", use_container_width=True): 
+                    st.session_state.roulette_bets["0"] = st.session_state.roulette_bets.get("0", 0) + st.session_state.roulette_chips
+                
+                for row in range(12):
+                    rc1, rc2, rc3 = st.columns(3)
+                    n1, n2, n3 = row*3+1, row*3+2, row*3+3
+                    for n, col in zip([n1,n2,n3], [rc1,rc2,rc3]):
+                         color = "🔴" if n in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "⚫"
+                         if col.button(f"{color} {n}", key=f"rb_{n}", use_container_width=True):
+                             st.session_state.roulette_bets[str(n)] = st.session_state.roulette_bets.get(str(n), 0) + st.session_state.roulette_chips
+                
+                sb1, sb2 = st.columns(2)
+                if sb1.button("🔴 紅色", key="rb_red"): st.session_state.roulette_bets["紅色"] = st.session_state.roulette_bets.get("紅色", 0) + st.session_state.roulette_chips
+                if sb2.button("⚫ 黑色", key="rb_black"): st.session_state.roulette_bets["黑色"] = st.session_state.roulette_bets.get("黑色", 0) + st.session_state.roulette_chips
+                
+                sb3, sb4 = st.columns(2)
+                if sb3.button("單數", key="rb_odd"): st.session_state.roulette_bets["單數"] = st.session_state.roulette_bets.get("單數", 0) + st.session_state.roulette_chips
+                if sb4.button("雙數", key="rb_even"): st.session_state.roulette_bets["雙數"] = st.session_state.roulette_bets.get("雙數", 0) + st.session_state.roulette_chips
 
         # [LOCKED] Baccarat Logic
         elif st.session_state.current_game == 'baccarat':
@@ -1190,7 +1192,7 @@ with t_p[3]: # 商城
 
                 limit_txt = f"🔒 需 {r.get('mall_min_rank', '無限制')}" if r.get('mall_min_rank') != '無限制' else "✅ 無限制"
                 
-                # [FIXED] Mall Card HTML Structure - Properly closed div, No item_value
+                # [FIXED] Mall Card HTML Structure
                 img_html = f"<img src='{r['img_url']}' class='mall-img'>" if r['img_url'] else ""
                 
                 st.markdown(f'''<div class="mall-card">{img_html}<div><p>{r['item_name']}</p><p class="mall-price">{xp_display}</p>{vp_display}</div><p style="color:#AAA;font-size:0.8em;margin-top:5px;">{limit_txt}</p></div>''', unsafe_allow_html=True)
@@ -1237,7 +1239,7 @@ with t_p[5]: # 榜單
     ldf1, ldf2 = st.columns(2)
     with ldf1:
         st.markdown(f"<div class='glory-title'>{lb_title_1}</div>", unsafe_allow_html=True)
-        # [FIXED] Full List Vertical
+        # [FIXED] Vertical List
         df1 = pd.read_sql_query("SELECT L.player_id, M.name, L.hero_points FROM Leaderboard L JOIN Members M ON L.player_id=M.pf_id WHERE M.role != '老闆' ORDER BY L.hero_points DESC LIMIT 20", conn)
         
         if not df1.empty:
@@ -1261,7 +1263,7 @@ with t_p[5]: # 榜單
 
     with ldf2:
         st.markdown(f"<div class='glory-title'>{lb_title_2}</div>", unsafe_allow_html=True)
-        # [FIXED] Full List Vertical
+        # [FIXED] Vertical List
         df2 = pd.read_sql_query("SELECT G.player_id, M.name, G.monthly_points FROM Monthly_God G JOIN Members M ON G.player_id=M.pf_id WHERE M.role != '老闆' ORDER BY G.monthly_points DESC LIMIT 20", conn)
         
         if not df2.empty:
@@ -1506,11 +1508,28 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 # [FIXED] Column strip and check
                 df.columns = df.columns.str.strip()
                 if 'ID' not in df.columns:
-                     st.error(f"錯誤：找不到 'ID' 欄位。偵測到的欄位: {list(df.columns)}")
-                     st.stop()
+                     # Auto detect tab delimiter if single column
+                     if len(df.columns) == 1:
+                         up.seek(0)
+                         try: df = pd.read_csv(up, sep='\t', encoding='utf-8-sig')
+                         except: 
+                             up.seek(0)
+                             df = pd.read_csv(up, sep='\t', encoding='big5')
+                         df.columns = df.columns.str.strip()
+                     
+                     if 'ID' not in df.columns:
+                         st.error(f"錯誤：找不到 'ID' 欄位。偵測到的欄位: {list(df.columns)}")
+                         st.stop()
+                
+                # [FIXED] Duplicate Filename Check
+                chk_file = conn.execute("SELECT 1 FROM Import_History WHERE filename=?", (fn,)).fetchone()
+                if chk_file:
+                    st.error(f"❌ 檔案 {fn} 已被匯入過！請勿重複匯入。")
+                    st.stop()
                 
                 matrix = {1200: (200, 0.75, [2, 1.5, 1]), 3400: (400, 1.5, [5, 4, 3]), 6600: (600, 2.0, [10, 8, 6]), 11000: (1000, 3.0, [20, 15, 10]), 21500: (1500, 5.0, [40, 30, 20])}
-                base, p_mult, bonuses = matrix[buy]
+                base, p_mult, bonuses = matrix.get(buy, (100, 1.0, [1, 1, 1])) # Default fallback
+                
                 with sqlite3.connect('poker_data.db') as tx_conn:
                     for _, r in df.iterrows():
                         pid = str(r['ID']); raw_name = str(r['Nickname']); name = raw_name[:10] if len(raw_name) > 10 else raw_name
@@ -1519,18 +1538,56 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                              tx_conn.execute("INSERT OR REPLACE INTO Members (pf_id, name, xp, role) VALUES (?, ?, COALESCE((SELECT xp FROM Members WHERE pf_id=?), 0), '玩家')", (pid, name, pid))
                         
                         rank = int(r['Rank'])
-                        points = base + int(base * (1/rank) * p_mult)
+                        re_e = int(r.get('Re-entry', 0))
+                        
+                        # [FIXED] Formula: Base + Rank Bonus + Re-entry Bonus
+                        points = base + int(base * (1/rank) * p_mult) + (base * re_e)
+                        
                         if rank <= 3: points = int(points * bonuses[rank-1])
                         
                         tx_conn.execute("INSERT OR REPLACE INTO Leaderboard (player_id, hero_points) VALUES (?, COALESCE((SELECT hero_points FROM Leaderboard WHERE player_id=?), 0) + ?)", (pid, pid, points))
                         tx_conn.execute("INSERT OR REPLACE INTO Monthly_God (player_id, monthly_points) VALUES (?, COALESCE((SELECT monthly_points FROM Monthly_God WHERE player_id=?), 0) + ?)", (pid, pid, points))
                         
-                        tx_conn.execute("INSERT INTO Tournament_Records (player_id, buy_in, rank, re_entries, payout, time, filename, actual_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
-                                        (pid, buy, rank, int(r.get('Re-entry', 0)), 0, datetime.now(), fn, buy))
+                        # Calculate Actual Fee and Discount
+                        remark = str(r.get('Remark', '')) if pd.notna(r.get('Remark')) else ''
+                        discounts = sum([int(d) for d in re.findall(r'(\d+)抵用卷', remark)])
+                        total_fee = base * (re_e + 1)
+                        actual = max(0, total_fee - discounts)
+                        
+                        # Give 10% XP Reward
+                        xp_reward = int(actual * 0.1)
+                        if xp_reward > 0:
+                            tx_conn.execute("UPDATE Members SET xp = xp + ? WHERE pf_id = ?", (xp_reward, pid))
+                        
+                        payout = 0
+                        if 'Payout Amount' in r and pd.notna(r['Payout Amount']):
+                             try: payout = int(str(r['Payout Amount']).replace(',', ''))
+                             except: pass
 
+                        tx_conn.execute("INSERT INTO Tournament_Records (player_id, buy_in, rank, re_entries, payout, time, filename, total_discount, actual_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                                        (pid, buy, rank, re_e, payout, datetime.now(), fn, discounts, actual))
+                    
+                    # Log Import
+                    tx_conn.execute("INSERT INTO Import_History (filename, import_time) VALUES (?, ?)", (fn, datetime.now()))
                     tx_conn.commit()
-                st.success("完成")
+                st.success(f"✅ 成功匯入 {fn}")
             except Exception as e: st.error(f"錯誤: {e}")
+        
+        # [NEW] Import History Log
+        st.markdown("---")
+        st.subheader("📜 匯入歷史紀錄 (可刪除)")
+        hist_df = pd.read_sql_query("SELECT * FROM Import_History ORDER BY import_time DESC", conn)
+        if not hist_df.empty:
+            for i, row in hist_df.iterrows():
+                c1, c2, c3 = st.columns([3, 2, 1])
+                c1.write(row['filename'])
+                c2.write(row['import_time'])
+                if c3.button("刪除", key=f"del_imp_{row['filename']}"):
+                    with sqlite3.connect('poker_data.db') as tx_conn:
+                        tx_conn.execute("DELETE FROM Import_History WHERE filename=?", (row['filename'],))
+                        tx_conn.commit()
+                    st.rerun()
+        else: st.info("尚無匯入紀錄")
 
         st.subheader("📊 盈虧報表"); 
         if st.button("查詢今日盈虧"):
@@ -1556,6 +1613,10 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 st.write("📢 **自動廣播觸發門檻**")
                 th_xp = st.number_input("XP 大獎門檻", value=int((conn.execute("SELECT config_value FROM System_Settings WHERE config_key='marquee_th_xp'").fetchone() or ("5000",))[0]))
                 th_val = st.number_input("物品價值門檻", value=int((conn.execute("SELECT config_value FROM System_Settings WHERE config_key='marquee_th_val'").fetchone() or ("10000",))[0]))
+                
+                st.write("🎁 **每日簽到 XP 設定**")
+                n_cmin = st.number_input("最小 XP", value=ci_min)
+                n_cmax = st.number_input("最大 XP", value=ci_max)
 
                 if st.button("保存視覺與公告"):
                     with sqlite3.connect('poker_data.db') as tx_conn:
@@ -1569,6 +1630,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                         tx_conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_mode', ?)", (new_m_mode,))
                         tx_conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_th_xp', ?)", (str(th_xp),))
                         tx_conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('marquee_th_val', ?)", (str(th_val),))
+                        tx_conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('checkin_min', ?)", (str(n_cmin),))
+                        tx_conn.execute("INSERT OR REPLACE INTO System_Settings (config_key, config_value) VALUES ('checkin_max', ?)", (str(n_cmax),))
                         tx_conn.commit()
                     st.success("已更新"); st.rerun()
 
@@ -1628,6 +1691,54 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                  st.success("Saved")
 
         st.subheader("📜 任務管理")
+        
+        # [NEW] Add Mission Form
+        with st.expander("➕ 新增任務 (Create Mission)", expanded=False):
+            with st.form("create_mission_form"):
+                c1, c2 = st.columns(2)
+                new_title = c1.text_input("任務標題")
+                new_desc = c2.text_input("任務描述")
+                
+                c3, c4, c5 = st.columns(3)
+                new_type = c3.selectbox("任務類型 (重置週期)", ["Daily", "Weekly", "Monthly", "Season"])
+                new_xp = c4.number_input("獎勵 XP", min_value=0, value=100)
+                new_item = c5.selectbox("獎勵物品 (可選)", ["無"] + pd.read_sql_query("SELECT item_name FROM Inventory", conn)['item_name'].tolist())
+                
+                c6, c7 = st.columns(2)
+                # Criteria map
+                criteria_map = {
+                    "每日簽到": "daily_checkin",
+                    "每日勝場": "daily_win", 
+                    "每週遊玩場次": "weekly_play",
+                    "每月活躍天數": "monthly_days",
+                    "排位等級 (1=銀...5=菁英)": "rank_level",
+                    "VIP 等級 (1~4)": "vip_level",
+                    "VIP 持續天數": "vip_duration"
+                }
+                crit_label = c6.selectbox("達成條件類型", list(criteria_map.keys()))
+                new_criteria = criteria_map[crit_label]
+                new_target = c7.number_input("目標數值 (Target Value)", min_value=1, value=1)
+                
+                c8, c9 = st.columns(2)
+                new_vip_req = c8.selectbox("限定 VIP 等級才可接", [0, 1, 2, 3, 4], help="0為不限")
+                new_rank_req = c9.selectbox("限定排位才可接 (0-5)", [0, 1, 2, 3, 4, 5], help="0為不限")
+
+                if st.form_submit_button("確認新增"):
+                    if not new_title:
+                        st.error("標題不可為空")
+                    else:
+                        item_val = None if new_item == "無" else new_item
+                        with sqlite3.connect('poker_data.db') as tx_conn:
+                            tx_conn.execute("""
+                                INSERT INTO Missions 
+                                (title, description, reward_xp, type, target_criteria, target_value, status, reward_item, required_vip_level, required_rank_level) 
+                                VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?)
+                            """, (new_title, new_desc, new_xp, new_type, new_criteria, new_target, item_val, new_vip_req, new_rank_req))
+                            tx_conn.commit()
+                        st.success("任務新增成功！")
+                        st.rerun()
+
+        st.write("---")
         ms = pd.read_sql_query("SELECT * FROM Missions", conn)
         for _, m in ms.iterrows():
             with st.expander(f"{m['title']} ({m['status']})"):
@@ -1656,6 +1767,33 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 elif "軟重置" in sch: tx_conn.execute("UPDATE Leaderboard SET hero_points = CAST(hero_points * 0.4 AS INTEGER) WHERE player_id != '330999'")
                 tx_conn.commit()
             st.success("完成")
+        
+        # [NEW] Clear Leaderboards
+        c_clear1, c_clear2 = st.columns(2)
+        if c_clear1.button("🧨 清空『🔥 月度戰神』榜", type="secondary"):
+             with sqlite3.connect('poker_data.db') as tx_conn:
+                 tx_conn.execute("DELETE FROM Monthly_God")
+                 tx_conn.commit()
+             st.warning("月度戰神榜已清空！")
+             
+        if c_clear2.button("💣 清空『🎖️ 菁英總榜』榜", type="secondary"):
+             with sqlite3.connect('poker_data.db') as tx_conn:
+                 tx_conn.execute("DELETE FROM Leaderboard")
+                 tx_conn.commit()
+             st.warning("菁英總榜已清空！")
+
+        st.write("---")
+        st.write("🔄 **特殊重置**")
+        if st.button("重置『賽季任務 (Season)』紀錄"):
+            with sqlite3.connect('poker_data.db') as tx_conn:
+                season_m_ids = pd.read_sql_query("SELECT id FROM Missions WHERE type='Season'", tx_conn)['id'].tolist()
+                if season_m_ids:
+                    placeholders = ','.join('?' for _ in season_m_ids)
+                    tx_conn.execute(f"DELETE FROM Mission_Logs WHERE mission_id IN ({placeholders})", season_m_ids)
+                    tx_conn.commit()
+                    st.success("賽季任務紀錄已重置，玩家可重新達成領獎！")
+                else:
+                    st.warning("目前沒有賽季任務。")
             
         if user_role == "老闆":
             st.markdown("### ⚖️ 上帝之手 (手動/批量調整)")
