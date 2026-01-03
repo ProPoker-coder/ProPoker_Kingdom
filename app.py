@@ -7,7 +7,6 @@ import math
 import threading
 from datetime import datetime, timedelta
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
 
 # --- 0. 系統核心配置 ---
 st.set_page_config(
@@ -17,18 +16,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 1. Supabase 連線初始化 (增強穩定性) ---
+# --- 1. Supabase 連線初始化 (修正版) ---
 @st.cache_resource
 def init_connection():
     try:
         if "supabase" in st.secrets:
-            # 增加 timeout 設定以減少斷線機率
-            opts = ClientOptions().replace(postgrest_client_timeout=10)
-            return create_client(
-                st.secrets["supabase"]["url"], 
-                st.secrets["supabase"]["key"],
-                options=opts
-            )
+            # 回歸最單純的連線方式，依靠下方的 safe_execute 處理重試
+            return create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
         st.error("❌ 找不到 secrets 設定。")
         st.stop()
     except Exception as e:
@@ -37,7 +31,7 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- 2. 核心：快取與容錯讀取 ---
+# --- 2. 核心：快取與容錯讀取 (解決斷線問題) ---
 
 def safe_execute(query, retries=3):
     """資料庫執行保護殼，遇到網路錯誤自動重試"""
@@ -45,13 +39,14 @@ def safe_execute(query, retries=3):
         try:
             return query.execute()
         except Exception as e:
-            if i == retries - 1: raise e # 最後一次還是失敗則報錯
-            time.sleep(0.5) # 等待 0.5 秒後重試
+            if i == retries - 1: 
+                print(f"DB Error: {e}")
+                raise e 
+            time.sleep(0.5)
 
 @st.cache_data(ttl=60)
 def get_all_settings():
     try:
-        # 使用 safe_execute 保護讀取
         response = safe_execute(supabase.table("System_Settings").select("*"))
         return {item['config_key']: item['config_value'] for item in response.data}
     except: return {}
@@ -78,7 +73,6 @@ def get_current_user_data(player_id):
 def update_user_xp(player_id, amount):
     if 'user_data' in st.session_state:
         st.session_state.user_data['xp'] += amount
-    # 背景執行
     threading.Thread(target=lambda: safe_execute(supabase.table("Members").update({"xp": supabase.table("Members").select("xp").eq("pf_id", player_id).execute().data[0]['xp'] + amount}).eq("pf_id", player_id))).start()
 
 def log_game_transaction(player_id, game, action, amount):
@@ -218,8 +212,6 @@ def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
         if not m_res.data: return False, False, 0
         m_row = m_res.data[0]
         
-        # 任務過期檢查... (省略部分邏輯以簡化，使用核心檢查)
-        
         start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if m_type == "Weekly": start_time = now - timedelta(days=now.weekday())
         elif m_type == "Monthly": start_time = now.replace(day=1)
@@ -245,7 +237,6 @@ def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
                 cons = mem.data[0]['consecutive_days'] or 0
                 current_val = cons; met = cons >= target_val
         elif criteria == "daily_win":
-            # 簡化查詢避免 timeout
             res = safe_execute(supabase.table("Prizes").select("id", count="exact").eq("player_id", player_id).ilike("source", "GameWin%").gte("time", now.strftime("%Y-%m-%d 00:00:00")))
             cnt = res.count or 0
             current_val = min(cnt, target_val); met = cnt >= target_val
@@ -1362,8 +1353,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         *(註：買入<3000底分100，買入>=3000底分200)*
 
         **💰 XP 獎勵公式 (全額回饋)：**
-        `XP = 比賽獎金 + 實際手續費`
-        *(不再扣除 10%)*
+        `XP = 實際手續費`
+        *(不再扣除 10%，不含獎金)*
         """)
         
         up = st.file_uploader("上傳 CSV / Excel")
@@ -1421,8 +1412,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     total_service_fee_gross = base * ents
                     actual_fee = max(0, total_service_fee_gross - discounts)
                     
-                    # [修正] XP = 獎金 + 實際手續費 (全額回饋)
-                    xp_reward = payout + actual_fee
+                    # [修正] XP = 實際手續費 (完全不含獎金，100% 回饋)
+                    xp_reward = actual_fee
                     update_user_xp(pid, xp_reward)
                     
                     # 計算積分
