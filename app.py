@@ -3,7 +3,6 @@ import pandas as pd
 import random
 import re
 import time
-import io
 import math
 import threading
 from datetime import datetime, timedelta
@@ -22,6 +21,7 @@ st.set_page_config(
 def init_connection():
     try:
         if "supabase" in st.secrets:
+            # 使用最基礎連線方式，避免版本相容性問題
             return create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["key"])
         st.error("❌ 找不到 secrets 設定。")
         st.stop()
@@ -31,14 +31,27 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- 2. 輔助函式 (SQL -> Supabase 轉譯層) ---
+# --- 2. 核心：快取與容錯讀取 ---
 
-# 為了效能，讀取設定檔使用快取 (TTL 30秒)
-@st.cache_data(ttl=30) 
+def safe_execute(query, retries=3):
+    """資料庫執行保護殼，遇到網路錯誤自動重試"""
+    for i in range(retries):
+        try:
+            return query.execute()
+        except Exception as e:
+            if i == retries - 1: 
+                print(f"DB Error: {e}")
+                # 不拋出錯誤，回傳 None 讓 UI 繼續運作
+                return None
+            time.sleep(0.5)
+
+@st.cache_data(ttl=60)
 def get_all_settings():
     try:
-        response = supabase.table("System_Settings").select("*").execute()
-        return {item['config_key']: item['config_value'] for item in response.data}
+        response = safe_execute(supabase.table("System_Settings").select("*"))
+        if response:
+            return {item['config_key']: item['config_value'] for item in response.data}
+        return {}
     except: return {}
 
 def get_config(key, default_value):
@@ -47,19 +60,142 @@ def get_config(key, default_value):
 
 def set_config(key, value):
     try:
-        supabase.table("System_Settings").upsert({"config_key": key, "config_value": str(value)}).execute()
+        safe_execute(supabase.table("System_Settings").upsert({"config_key": key, "config_value": str(value)}))
         get_all_settings.clear()
     except Exception as e: print(f"Config Error: {e}")
 
-# 獲取玩家資料 (即時)
 def get_current_user_data(player_id):
     if 'user_data' not in st.session_state or st.session_state.user_data.get('pf_id') != player_id:
-        res = supabase.table("Members").select("*").eq("pf_id", player_id).execute()
-        if res.data: st.session_state.user_data = res.data[0]
-        else: return None
+        try:
+            res = safe_execute(supabase.table("Members").select("pf_id, name, xp, xp_temp, role, vip_level, vip_expiry, vip_points, last_checkin, consecutive_days").eq("pf_id", player_id))
+            if res and res.data: st.session_state.user_data = res.data[0]
+            else: return None
+        except: return None
     return st.session_state.user_data
 
-# 積分與等級計算 (鎖定公式)
+def update_user_xp(player_id, amount):
+    if 'user_data' in st.session_state:
+        st.session_state.user_data['xp'] += amount
+    threading.Thread(target=lambda: safe_execute(supabase.table("Members").update({"xp": supabase.table("Members").select("xp").eq("pf_id", player_id).execute().data[0]['xp'] + amount}).eq("pf_id", player_id))).start()
+
+def log_game_transaction(player_id, game, action, amount):
+    threading.Thread(target=lambda: safe_execute(supabase.table("Game_Transactions").insert({"player_id": player_id, "game_type": game, "action_type": action, "amount": amount, "timestamp": datetime.now().isoformat()}))).start()
+
+# --- 3. UI 初始化 (完整保留 13 個參數回傳) ---
+def init_flagship_ui():
+    m_spd = get_config('marquee_speed', "35")
+    m_bg = get_config('welcome_bg_url', "https://img.freepik.com/free-photo/poker-table-dark-atmosphere_23-2151003784.jpg")
+    m_title = get_config('welcome_title', "PRO POKER")
+    m_subtitle = get_config('welcome_subtitle', "撲 洛 傳 奇 殿 堂")
+    
+    lb_title_1 = get_config('leaderboard_title_1', "🎖️ 菁英總榜")
+    lb_title_2 = get_config('leaderboard_title_2', "🔥 月度戰神")
+
+    m_desc1 = get_config('lobby_desc_1', "♠️ 頂級賽事體驗")
+    m_desc2 = get_config('lobby_desc_2', "♥ 公平公正競技")
+    m_desc3 = get_config('lobby_desc_3', "♦ 專屬尊榮服務")
+
+    m_mode = get_config('marquee_mode', "custom")
+    m_txt = get_config('marquee_text', "撲洛王國營運中，歡迎回歸領地！")
+    
+    ci_min = int(get_config('checkin_min', "10"))
+    ci_max = int(get_config('checkin_max', "500"))
+
+    if m_mode == 'auto':
+        try:
+            th_xp = int(get_config('marquee_th_xp', "5000"))
+            res = safe_execute(supabase.table("Prizes").select("prize_name, source, player_id").order("id", desc=True).limit(20))
+            if res and res.data:
+                for row in res.data:
+                    p_name = row['prize_name']
+                    is_big_win = False
+                    xp_match = re.search(r'(\d+)\s*XP', str(p_name), re.IGNORECASE)
+                    if xp_match and int(xp_match.group(1)) >= th_xp: is_big_win = True
+                    if "大獎" in str(p_name) or "iPhone" in str(p_name): is_big_win = True
+
+                    if is_big_win:
+                        try:
+                            mem_res = safe_execute(supabase.table("Members").select("name").eq("pf_id", row['player_id']))
+                            p_real_name = mem_res.data[0]['name'] if mem_res and mem_res.data else row['player_id']
+                        except: p_real_name = row['player_id']
+                        
+                        m_txt = f"🎉 恭喜玩家 【{p_real_name}】 在 {row['source']} 中獲得大獎：{p_name}！ 🔥"
+                        break
+        except: pass
+
+    st.markdown(f"""
+        <style>
+            :root {{ color-scheme: dark; }}
+            html, body, .stApp {{ background-color: #000000 !important; color: #FFFFFF !important; font-family: 'Arial', sans-serif; }}
+            .stTextInput input, .stNumberInput input, .stSelectbox div, .stTextArea textarea {{ background-color: #1a1a1a !important; color: #FFFFFF !important; border: 1px solid #444 !important; border-radius: 8px !important; }}
+            .stButton > button {{ background: linear-gradient(180deg, #333 0%, #111 100%) !important; color: #FFD700 !important; border: 1px solid #FFD700 !important; border-radius: 8px !important; font-weight: bold !important; transition: 0.1s; }}
+            .stButton > button:hover {{ background: linear-gradient(180deg, #FFD700 0%, #B8860B 100%) !important; color: #000 !important; transform: scale(1.02); }}
+            .stTabs [data-baseweb="tab-list"] {{ gap: 5px; background-color: #111; padding: 10px; border-radius: 15px; border: 1px solid #333; }}
+            .stTabs [data-baseweb="tab"] {{ background-color: #222; color: #AAA; border-radius: 8px; border: none; }}
+            .stTabs [aria-selected="true"] {{ background-color: #FFD700 !important; color: #000 !important; font-weight: bold; }}
+            
+            .welcome-wall {{ text-align: center; padding: 60px 20px; background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.9)), url('{m_bg}'); background-size: cover; border-radius: 20px; border: 2px solid #FFD700; margin-bottom: 20px; }}
+            .rank-card {{ background: linear-gradient(135deg, #1a1a1a 0%, #000 100%); border: 2px solid #FFD700; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(255, 215, 0, 0.3); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
+            .vip-card {{ background: linear-gradient(135deg, #000 0%, #222 100%); border: 2px solid #9B30FF; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(155, 48, 255, 0.3); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
+            .lb-rank-card {{ padding: 15px; border-radius: 15px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 10px rgba(0,0,0,0.5); border: 2px solid #FFF; }}
+            .lb-rank-1 {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.02); }}
+            .lb-rank-2 {{ background: linear-gradient(45deg, #E0E0E0, #B0B0B0); color: #000; box-shadow: 0 0 15px rgba(224,224,224,0.4); }}
+            .lb-rank-3 {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF; box-shadow: 0 0 10px rgba(205,127,50,0.4); }}
+            .lb-rank-norm {{ background: rgba(30,30,30,0.8); border: 1px solid #444; color: #EEE; }}
+            
+            .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; text-shadow: 0 0 10px rgba(255,215,0,0.5); }}
+            .mall-card {{ background: #151515; border: 1px solid #333; border-radius: 12px; padding: 15px; text-align: center; height: 100%; display:flex; flex-direction:column; justify-content:space-between; }}
+            .mall-card:hover {{ border-color: #FFD700; transform: translateY(-5px); }}
+            .mall-price {{ color: #00FF00; font-weight: bold; font-size: 1.2em; }}
+            
+            .lobby-card {{ background: linear-gradient(145deg, #222, #111); border: 1px solid #444; border-radius: 15px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
+            .lobby-card:hover {{ border-color: #FFD700; transform: scale(1.02); box-shadow: 0 0 15px rgba(255, 215, 0, 0.2); }}
+            .lobby-icon {{ font-size: 3em; margin-bottom: 10px; }}
+            
+            .bacc-zone {{ border: 2px solid; border-radius: 10px; padding: 10px; margin: 5px; min-height: 120px; background-color: rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:0.2s; }}
+            .bacc-player {{ border-color: #00BFFF; }} .bacc-banker {{ border-color: #FF4444; }} .bacc-tie {{ border-color: #00FF00; }}
+            .bacc-card {{ background-color: #FFF; color: #000; border-radius: 5px; width: 40px; height: 60px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1em; margin: 2px; }}
+            .bacc-card.red {{ color: #D40000; }} .bacc-card.black {{ color: #000000; }}
+            
+            .bj-table {{ background-color: #35654d; padding: 30px; border-radius: 20px; border: 8px solid #5c3a21; box-shadow: inset 0 0 50px rgba(0,0,0,0.8); text-align: center; margin-bottom: 20px; }}
+            .bj-card {{ background-color: #FFFFFF; color: #000000; border-radius: 6px; display: inline-block; width: 60px; height: 85px; margin: 5px; padding: 5px; font-family: 'Arial', sans-serif; font-weight: bold; font-size: 1.2em; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); vertical-align: middle; line-height: 1.1; }}
+            .suit-red {{ color: #D40000 !important; }} .suit-black {{ color: #000000 !important; }}
+            
+            .roulette-history-bar {{ display: flex; gap: 5px; overflow-x: auto; padding: 10px; background: #000; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }}
+            .hist-ball {{ min-width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #fff; margin-right: 5px; }}
+            .roulette-wheel-anim {{ width: 200px; height: 200px; border-radius: 50%; border: 10px dashed #FFD700; margin: 20px auto; animation: spin-ball 2s cubic-bezier(0.25, 0.1, 0.25, 1); background: radial-gradient(circle, #000 40%, #0d2b12 100%); display: flex; align-items: center; justify-content: center; font-size: 3em; color: #FFF; font-weight: bold; }}
+            @keyframes spin-ball {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(3600deg); }} }}
+            
+            .lm-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 20px; background: #000; border: 4px solid #FFD700; border-radius: 20px; }}
+            .lm-cell {{ background: #222; border: 2px solid #444; border-radius: 10px; padding: 10px; text-align: center; color: #FFF; transition: 0.1s; height: 100px; display: flex; flex-direction: column; justify-content: center; align-items: center; }}
+            .lm-active {{ background: #FFF; border-color: #FFD700; color: #000; box-shadow: 0 0 20px #FFD700; transform: scale(1.1); font-weight: bold; }}
+            .lm-img {{ width: 50px; height: 50px; object-fit: contain; margin-bottom: 5px; }}
+            
+            .marquee-container {{ background: #1a1a1a; color: #FFD700; padding: 12px 0; overflow: hidden; white-space: nowrap; border-top: 2px solid #FFD700; border-bottom: 2px solid #FFD700; margin-bottom: 25px; }}
+            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.5em; font-weight: bold; }}
+            @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
+            
+            .mission-card {{ background: linear-gradient(90deg, #222 0%, #111 100%); border-left: 5px solid #FFD700; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }}
+            .mission-title {{ font-size: 1.2em; font-weight: bold; color: #FFF; }}
+            .mission-reward {{ color: #00FF00; font-weight: bold; border: 1px solid #00FF00; padding: 5px 10px; border-radius: 15px; }}
+            
+            .mine-btn {{ width: 100%; aspect-ratio: 1; border-radius: 8px; border: 2px solid #444; background: #222; font-size: 1.5em; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.1s; }}
+            .mine-btn:active {{ transform: scale(0.95); background: #444; }}
+            .mine-boom {{ background: #500; border-color: #F00; animation: shake 0.5s; }}
+            .mine-safe {{ background: #050; border-color: #0F0; }}
+            @keyframes shake {{ 0% {{ transform: translate(1px, 1px) rotate(0deg); }} 10% {{ transform: translate(-1px, -2px) rotate(-1deg); }} 20% {{ transform: translate(-3px, 0px) rotate(1deg); }} 30% {{ transform: translate(3px, 2px) rotate(0deg); }} 40% {{ transform: translate(1px, -1px) rotate(1deg); }} 50% {{ transform: translate(-1px, 2px) rotate(-1deg); }} 60% {{ transform: translate(-3px, 1px) rotate(0deg); }} 70% {{ transform: translate(3px, 1px) rotate(-1deg); }} 80% {{ transform: translate(-1px, -1px) rotate(1deg); }} 90% {{ transform: translate(1px, 2px) rotate(0deg); }} 100% {{ transform: translate(1px, -2px) rotate(-1deg); }} }}
+            
+            .bead-plate {{ display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; width: 100%; padding: 10px; background: #FFF; border: 2px solid #999; overflow-x: auto; margin-bottom: 15px; border-radius: 8px; }}
+            .bead {{ width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 900; margin: auto; color: white; box-shadow: inset -2px -2px 5px rgba(0,0,0,0.3); border: 1px solid rgba(0,0,0,0.2); }}
+            .bead-P {{ background: radial-gradient(circle at 10px 10px, #5555FF, #0000AA); }}
+            .bead-B {{ background: radial-gradient(circle at 10px 10px, #FF5555, #AA0000); }}
+            .bead-T {{ background: radial-gradient(circle at 10px 10px, #55FF55, #008000); color: black; }}
+        </style>
+        <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
+    """, unsafe_allow_html=True)
+    # [FIXED] 回傳所有 13 個變數，解決 ValueError
+    return m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode, ci_min, ci_max
+
 def get_rank_v2500(pts):
     limit_c = int(get_config('rank_limit_challenger', "1000"))
     limit_m = int(get_config('rank_limit_master', "500"))
@@ -87,263 +223,50 @@ def validate_nickname(nickname):
         if len(nickname) > 6: return False, "中文暱稱不可超過 6 個字"
     return True, "OK"
 
-# VIP 相關
 def get_vip_bonus(level):
     return float(get_config(f'vip_bonus_{level}', "0"))
 
 def get_vip_discount(level):
     return float(get_config(f'vip_discount_{level}', "0"))
 
-# 交易日誌
-def log_game_transaction(player_id, game, action, amount):
-    # 使用背景執行緒避免卡頓
-    threading.Thread(target=lambda: supabase.table("Game_Transactions").insert({
-        "player_id": player_id, "game_type": game, "action_type": action, 
-        "amount": amount, "timestamp": datetime.now().isoformat()
-    }).execute()).start()
-
-# XP 更新 (含本地快取與遠端同步)
-def update_user_xp(player_id, amount):
-    if 'user_data' in st.session_state:
-        st.session_state.user_data['xp'] += amount
-    # 背景同步 DB
-    threading.Thread(target=lambda: _sync_xp(player_id, amount)).start()
-
-def _sync_xp(player_id, amount):
-    try:
-        # 為了資料一致性，這裡重新抓取並更新，但因為在背景執行，不影響前端速度
-        cur = supabase.table("Members").select("xp").eq("pf_id", player_id).execute().data[0]['xp']
-        supabase.table("Members").update({"xp": cur + amount}).eq("pf_id", player_id).execute()
-    except: pass
-
-# 任務狀態檢查
 def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
     now = datetime.now()
-    m_res = supabase.table("Missions").select("*").eq("id", mission_id).execute()
-    if not m_res.data: return False, False, 0
-    m_row = m_res.data[0]
-    
-    # Time limit check
-    if m_row.get('time_limit_months', 0) > 0:
-        mem = supabase.table("Members").select("join_date").eq("pf_id", player_id).execute()
-        if mem.data and mem.data[0]['join_date']:
-             try:
-                 jd = datetime.strptime(mem.data[0]['join_date'], "%Y-%m-%d")
-                 if (now - jd).days > (m_row['time_limit_months'] * 30): return False, False, 0
-             except: pass
-    
-    start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if m_type == "Weekly": start_time = now - timedelta(days=now.weekday())
-    elif m_type == "Monthly": start_time = now.replace(day=1)
-    elif m_type == "Season": start_time = datetime(2020, 1, 1) 
-    
-    claimed = False
-    log_res = supabase.table("Mission_Logs").select("claim_time").eq("player_id", player_id).eq("mission_id", mission_id).order("claim_time", desc=True).limit(1).execute()
-    if log_res.data:
-        last_claim_str = log_res.data[0]['claim_time']
-        try:
+    try:
+        m_res = safe_execute(supabase.table("Missions").select("*").eq("id", mission_id))
+        if not m_res.data: return False, False, 0
+        m_row = m_res.data[0]
+        
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if m_type == "Weekly": start_time = now - timedelta(days=now.weekday())
+        elif m_type == "Monthly": start_time = now.replace(day=1)
+        elif m_type == "Season": start_time = datetime(2020, 1, 1) 
+        
+        claimed = False
+        log_res = safe_execute(supabase.table("Mission_Logs").select("claim_time").eq("player_id", player_id).eq("mission_id", mission_id).order("claim_time", desc=True).limit(1))
+        if log_res and log_res.data:
+            last_claim_str = log_res.data[0]['claim_time']
             last_claim = datetime.fromisoformat(last_claim_str.replace('Z', '+00:00')).replace(tzinfo=None)
-            if m_row.get('recurring_months', 0) > 0:
-                 if (now - last_claim).days < (m_row['recurring_months'] * 30): claimed = True
-            else:
-                 if last_claim >= start_time: claimed = True
-        except: pass
+            if last_claim >= start_time: claimed = True
 
-    current_val = 0
-    met = False
-    
-    if criteria == "daily_checkin":
-        mem = supabase.table("Members").select("last_checkin").eq("pf_id", player_id).execute()
-        if mem.data and mem.data[0]['last_checkin']:
-            if mem.data[0]['last_checkin'].startswith(now.strftime("%Y-%m-%d")): met = True; current_val = 1
-    elif criteria == "consecutive_checkin":
-        mem = supabase.table("Members").select("consecutive_days").eq("pf_id", player_id).execute()
-        if mem.data:
-            cons = mem.data[0]['consecutive_days'] or 0
-            current_val = cons; met = cons >= target_val
-    elif criteria == "daily_win":
-        res = supabase.table("Prizes").select("id", count="exact").eq("player_id", player_id).ilike("source", "GameWin%").gte("time", now.strftime("%Y-%m-%d 00:00:00")).execute()
-        cnt = res.count or 0
-        current_val = min(cnt, target_val); met = cnt >= target_val
-    elif criteria == "game_play_count":
-        res = supabase.table("Game_Transactions").select("id", count="exact").eq("player_id", player_id).eq("action_type", "BET").gte("timestamp", start_time.isoformat()).execute()
-        cnt = res.count or 0
-        current_val = cnt; met = cnt >= target_val
-    elif criteria == "tournament_count":
-        res = supabase.table("Tournament_Records").select("id", count="exact").eq("player_id", player_id).gte("time", start_time.isoformat()).execute()
-        cnt = res.count or 0
-        current_val = cnt; met = cnt >= target_val
-    elif criteria == "monthly_days":
-        # Supabase doesn't support COUNT(DISTINCT) directly easily via API in one go without stored procedures, simulating with fetch
-        try:
-            res = supabase.table("Tournament_Records").select("time").eq("player_id", player_id).gte("time", start_time.isoformat()).execute()
-            dates = set(d['time'].split('T')[0] for d in res.data)
-            current_val = len(dates); met = current_val >= target_val
-        except: pass
-    elif criteria == "rank_level":
-        lb = supabase.table("Leaderboard").select("hero_points").eq("player_id", player_id).execute()
-        pts = lb.data[0]['hero_points'] if lb.data else 0
-        curr_lvl = rank_to_level(get_rank_v2500(pts))
-        current_val = curr_lvl; met = curr_lvl >= target_val
-    elif criteria == "vip_level":
-        mem = supabase.table("Members").select("vip_level").eq("pf_id", player_id).execute()
-        curr_vip = mem.data[0]['vip_level'] if mem.data else 0
-        current_val = curr_vip; met = curr_vip >= target_val
-    elif criteria == "vip_duration":
-        mem = supabase.table("Members").select("vip_expiry").eq("pf_id", player_id).execute()
-        if mem.data and mem.data[0]['vip_expiry']:
-            try:
-                exp_dt = datetime.strptime(mem.data[0]['vip_expiry'].split('.')[0], "%Y-%m-%d %H:%M:%S")
-                if exp_dt > now:
-                    days = (exp_dt - now).days
-                    current_val = days; met = days >= target_val
-            except: pass
+        current_val = 0
+        met = False
+        
+        if criteria == "daily_checkin":
+            mem = safe_execute(supabase.table("Members").select("last_checkin").eq("pf_id", player_id))
+            if mem and mem.data and mem.data[0]['last_checkin']:
+                if mem.data[0]['last_checkin'].startswith(now.strftime("%Y-%m-%d")): met = True; current_val = 1
+        elif criteria == "consecutive_checkin":
+            mem = safe_execute(supabase.table("Members").select("consecutive_days").eq("pf_id", player_id))
+            if mem and mem.data:
+                cons = mem.data[0]['consecutive_days'] or 0
+                current_val = cons; met = cons >= target_val
+        elif criteria == "daily_win":
+            res = safe_execute(supabase.table("Prizes").select("id", count="exact").eq("player_id", player_id).ilike("source", "GameWin%").gte("time", now.strftime("%Y-%m-%d 00:00:00")))
+            cnt = res.count if res else 0
+            current_val = min(cnt, target_val); met = cnt >= target_val
 
-    return met, claimed, current_val
-
-# --- 3. 旗艦視覺系統 (美工鎖定) ---
-def init_flagship_ui():
-    m_spd = get_config('marquee_speed', "35")
-    m_bg = get_config('welcome_bg_url', "https://img.freepik.com/free-photo/poker-table-dark-atmosphere_23-2151003784.jpg")
-    m_title = get_config('welcome_title', "PRO POKER")
-    m_subtitle = get_config('welcome_subtitle', "撲 洛 傳 奇 殿 堂")
-    
-    lb_title_1 = get_config('leaderboard_title_1', "🎖️ 菁英總榜")
-    lb_title_2 = get_config('leaderboard_title_2', "🔥 月度戰神")
-
-    m_desc1 = get_config('lobby_desc_1', "♠️ 頂級賽事體驗")
-    m_desc2 = get_config('lobby_desc_2', "♥ 公平公正競技")
-    m_desc3 = get_config('lobby_desc_3', "♦ 專屬尊榮服務")
-
-    m_mode = get_config('marquee_mode', "custom")
-    m_txt = get_config('marquee_text', "撲洛王國營運中，歡迎回歸領地！")
-    
-    ci_min = int(get_config('checkin_min', "10"))
-    ci_max = int(get_config('checkin_max', "500"))
-
-    if m_mode == 'auto':
-        try:
-            th_xp = int(get_config('marquee_th_xp', "5000"))
-            # 這裡為了效率，只抓最新的獎項
-            res = supabase.table("Prizes").select("player_id, prize_name, source").order("id", desc=True).limit(20).execute()
-            for row in res.data:
-                p_name = row['prize_name']
-                is_big_win = False
-                xp_match = re.search(r'(\d+)\s*XP', str(p_name), re.IGNORECASE)
-                if xp_match and int(xp_match.group(1)) >= th_xp: is_big_win = True
-                if "大獎" in str(p_name) or "iPhone" in str(p_name): is_big_win = True
-
-                if is_big_win:
-                    # 嘗試抓取名字
-                    try:
-                        mem_res = supabase.table("Members").select("name").eq("pf_id", row['player_id']).execute()
-                        p_real_name = mem_res.data[0]['name'] if mem_res.data else row['player_id']
-                    except: p_real_name = row['player_id']
-                    
-                    m_txt = f"🎉 恭喜玩家 【{p_real_name}】 在 {row['source']} 中獲得大獎：{p_name}！ 🔥"
-                    break
-        except: pass
-    
-    st.markdown(f"""
-        <style>
-            :root {{ color-scheme: dark; }}
-            html, body, .stApp {{ background-color: #000000 !important; color: #FFFFFF !important; font-family: 'Arial', sans-serif; }}
-            
-            .stTextInput input, .stNumberInput input, .stSelectbox div, .stTextArea textarea {{ background-color: #1a1a1a !important; color: #FFFFFF !important; border: 1px solid #444 !important; border-radius: 8px !important; }}
-            .stButton > button {{ background: linear-gradient(180deg, #333 0%, #111 100%) !important; color: #FFD700 !important; border: 1px solid #FFD700 !important; border-radius: 8px !important; font-weight: bold !important; transition: 0.3s; }}
-            .stButton > button:hover {{ background: linear-gradient(180deg, #FFD700 0%, #B8860B 100%) !important; color: #000 !important; transform: scale(1.02); }}
-            
-            .stTabs [data-baseweb="tab-list"] {{ gap: 5px; background-color: #111; padding: 10px; border-radius: 15px; border: 1px solid #333; }}
-            .stTabs [data-baseweb="tab"] {{ background-color: #222; color: #AAA; border-radius: 8px; border: none; }}
-            .stTabs [aria-selected="true"] {{ background-color: #FFD700 !important; color: #000 !important; font-weight: bold; }}
-
-            .welcome-wall {{ text-align: center; padding: 60px 20px; background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.9)), url('{m_bg}'); background-size: cover; border-radius: 20px; border: 2px solid #FFD700; margin-bottom: 20px; }}
-            .welcome-title {{ font-size: 3.5em; font-weight: 900; color: #FFD700; text-shadow: 0 0 20px rgba(255,215,0,0.8); }}
-            .welcome-subtitle {{ font-size: 1.5em; color: #EEE; letter-spacing: 5px; margin-bottom: 30px; }}
-            .feature-box {{ display: inline-block; margin: 10px; padding: 10px 20px; background: rgba(0,0,0,0.7); border: 1px solid #555; border-radius: 50px; color: #FFF; }}
-
-            .rank-card {{ background: linear-gradient(135deg, #1a1a1a 0%, #000 100%); border: 2px solid #FFD700; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(255, 215, 0, 0.15); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
-            .vip-card {{ background: linear-gradient(135deg, #000 0%, #222 100%); border: 2px solid #9B30FF; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(155, 48, 255, 0.2); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
-            .vip-badge {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000; padding: 5px 15px; border-radius: 15px; font-weight: 900; display: inline-block; margin-bottom: 15px; box-shadow: 0 0 10px gold; }}
-            
-            .stats-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }}
-            .stats-item {{ background: rgba(255,255,255,0.05); border: 1px solid #444; padding: 8px; border-radius: 8px; font-size: 0.9em; }}
-
-            .mall-card {{ background: #151515; border: 1px solid #333; border-radius: 12px; padding: 15px; text-align: center; height: 100%; display:flex; flex-direction:column; justify-content:space-between; }}
-            .mall-card:hover {{ border-color: #FFD700; transform: translateY(-5px); }}
-            .mall-price {{ color: #00FF00; font-weight: bold; font-size: 1.2em; }}
-            .vip-price {{ color: #9B30FF; font-weight: bold; font-size: 1.1em; }}
-            .mall-img {{ width: 100%; height: 120px; object-fit: contain; margin-bottom: 10px; border-radius: 8px; }}
-            
-            .lobby-card {{ background: linear-gradient(145deg, #222, #111); border: 1px solid #444; border-radius: 15px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; }}
-            .lobby-card:hover {{ border-color: #FFD700; transform: scale(1.02); }}
-            .lobby-icon {{ font-size: 3em; margin-bottom: 10px; }}
-            
-            .bacc-zone {{ border: 2px solid; border-radius: 10px; padding: 10px; margin: 5px; min-height: 150px; background-color: rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:0.2s; }}
-            .bacc-zone:hover {{ background-color: rgba(255,255,255,0.1); }}
-            .bacc-player {{ border-color: #00BFFF; }}
-            .bacc-banker {{ border-color: #FF4444; }}
-            .bacc-tie {{ border-color: #00FF00; }}
-            .bacc-pair {{ border-color: #FFD700; }}
-            .bacc-card {{ background-color: #FFF; color: #000; border-radius: 5px; width: 50px; height: 75px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.2em; margin: 2px; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); }}
-            .bacc-card.red {{ color: #D40000; }}
-            .bacc-card.black {{ color: #000000; }}
-            .bead-plate {{ display: grid; grid-template-columns: repeat(6, 1fr); grid-template-rows: repeat(6, 1fr); gap: 2px; width: 100%; height: 200px; background: #FFF; border: 1px solid #999; overflow-x: auto; margin-bottom: 15px; }}
-            .bead {{ width: 25px; height: 25px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; margin: auto; color: white; }}
-            .bead-P {{ background: #00BFFF; }}
-            .bead-B {{ background: #FF4444; }}
-            .bead-T {{ background: #00FF00; color: black; }}
-
-            .roulette-history-bar {{ display: flex; gap: 5px; overflow-x: auto; padding: 10px; background: #000; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }}
-            .hist-ball {{ min-width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #fff; margin-right: 5px; }}
-            .roulette-wheel-anim {{ width: 200px; height: 200px; border-radius: 50%; border: 10px dashed #FFD700; margin: 20px auto; animation: spin-ball 2s cubic-bezier(0.25, 0.1, 0.25, 1); background: radial-gradient(circle, #000 40%, #0d2b12 100%); display: flex; align-items: center; justify-content: center; font-size: 3em; color: #FFF; font-weight: bold; }}
-            @keyframes spin-ball {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(3600deg); }} }}
-            
-            .lm-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 20px; background: #000; border: 4px solid #FFD700; border-radius: 20px; }}
-            .lm-cell {{ background: #222; border: 2px solid #444; border-radius: 10px; padding: 10px; text-align: center; color: #FFF; transition: 0.1s; height: 100px; display: flex; flex-direction: column; justify-content: center; align-items: center; }}
-            .lm-active {{ background: #FFF; border-color: #FFD700; color: #000; box-shadow: 0 0 20px #FFD700; transform: scale(1.1); font-weight: bold; }}
-            .lm-img {{ width: 50px; height: 50px; object-fit: contain; margin-bottom: 5px; }}
-            
-            .bj-table {{ background-color: #35654d; padding: 30px; border-radius: 20px; border: 8px solid #5c3a21; box-shadow: inset 0 0 50px rgba(0,0,0,0.8); text-align: center; margin-bottom: 20px; }}
-            .bj-card {{ background-color: #FFFFFF; color: #000000; border-radius: 6px; display: inline-block; width: 60px; height: 85px; margin: 5px; padding: 5px; font-family: 'Arial', sans-serif; font-weight: bold; font-size: 1.2em; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); vertical-align: middle; line-height: 1.1; }}
-            .suit-red {{ color: #D40000 !important; }}
-            .suit-black {{ color: #000000 !important; }}
-
-            .lookup-result-box {{ background-color: #000 !important; border: 2px solid #333; border-radius: 10px; padding: 20px; color: #FFF !important; margin-bottom: 20px; }}
-            .lookup-label {{ color: #AAA; font-size: 0.9em; }}
-            .lookup-value {{ color: #00FF00; font-size: 1.2em; font-weight: bold; }}
-            
-            .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; }}
-            .lb-rank-card {{ padding: 15px; border-radius: 15px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 10px rgba(0,0,0,0.5); border: 2px solid #FFF; }}
-            .lb-rank-1 {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.02); }}
-            .lb-rank-2 {{ background: linear-gradient(45deg, #E0E0E0, #B0B0B0); color: #000; box-shadow: 0 0 15px rgba(224,224,224,0.4); }}
-            .lb-rank-3 {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF; box-shadow: 0 0 10px rgba(205,127,50,0.4); }}
-            .lb-rank-norm {{ background: rgba(30,30,30,0.8); border: 1px solid #444; color: #EEE; }}
-            .lb-badge {{ font-size: 1.8em; margin-right: 15px; min-width: 40px; text-align: center; }}
-            .lb-info {{ display: flex; flex-direction: column; text-align: left; flex-grow: 1; }}
-            .lb-name {{ font-weight: 900; font-size: 1.2em; }}
-            .lb-id {{ font-size: 0.8em; opacity: 0.8; }}
-            .lb-score {{ font-weight: bold; font-size: 1.3em; text-align: right; }}
-
-            .marquee-container {{ background: #1a1a1a; color: #FFD700; padding: 12px 0; overflow: hidden; white-space: nowrap; border-top: 2px solid #FFD700; border-bottom: 2px solid #FFD700; margin-bottom: 25px; }}
-            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.5em; font-weight: bold; }}
-            @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
-            
-            .mission-card {{ background: linear-gradient(90deg, #222 0%, #111 100%); border-left: 5px solid #FFD700; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }}
-            .mission-title {{ font-size: 1.2em; font-weight: bold; color: #FFF; }}
-            .mission-desc {{ font-size: 0.9em; color: #AAA; }}
-            .mission-reward {{ color: #00FF00; font-weight: bold; border: 1px solid #00FF00; padding: 5px 10px; border-radius: 15px; }}
-            
-            .mine-btn {{ width: 100%; aspect-ratio: 1; border-radius: 8px; border: 2px solid #444; background: #222; font-size: 1.5em; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }}
-            .mine-btn:hover {{ border-color: #FFD700; background: #333; }}
-            .mine-revealed {{ background: #111; border-color: #666; cursor: default; }}
-            .mine-boom {{ background: #500; border-color: #F00; animation: shake 0.5s; }}
-            .mine-safe {{ background: #050; border-color: #0F0; }}
-            @keyframes shake {{ 0% {{ transform: translate(1px, 1px) rotate(0deg); }} 10% {{ transform: translate(-1px, -2px) rotate(-1deg); }} 20% {{ transform: translate(-3px, 0px) rotate(1deg); }} 30% {{ transform: translate(3px, 2px) rotate(0deg); }} 40% {{ transform: translate(1px, -1px) rotate(1deg); }} 50% {{ transform: translate(-1px, 2px) rotate(-1deg); }} 60% {{ transform: translate(-3px, 1px) rotate(0deg); }} 70% {{ transform: translate(3px, 1px) rotate(-1deg); }} 80% {{ transform: translate(-1px, -1px) rotate(1deg); }} 90% {{ transform: translate(1px, 2px) rotate(0deg); }} 100% {{ transform: translate(1px, -2px) rotate(-1deg); }} }}
-        </style>
-        <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
-    """, unsafe_allow_html=True)
-    return m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode, ci_min, ci_max
+        return met, claimed, current_val
+    except: return False, False, 0
 
 # --- 4. 登入與側邊欄 ---
 if "player_id" not in st.session_state:
@@ -363,8 +286,10 @@ with st.sidebar:
     
     u_chk = None
     if p_id_input:
-        res = supabase.table("Members").select("role, password, ban_until").eq("pf_id", p_id_input).execute()
-        if res.data: u_chk = res.data[0]
+        try:
+            res = safe_execute(supabase.table("Members").select("role, password, ban_until").eq("pf_id", p_id_input))
+            if res and res.data: u_chk = res.data[0]
+        except: pass
             
     invite_cfg = get_config('reg_invite_code', "888")
     
@@ -390,21 +315,26 @@ with st.sidebar:
             rn = st.text_input("暱稱"); rpw = st.text_input("密碼", type="password"); ri = st.text_input("邀請碼")
             if st.form_submit_button("物理註冊") and ri == invite_cfg:
                 if rn:
-                    exist = supabase.table("Members").select("*").eq("pf_id", p_id_input).execute()
-                    if exist.data and (not exist.data[0]['password']):
-                         supabase.table("Members").update({"name": rn, "password": rpw, "role": "玩家", "join_date": datetime.now().strftime("%Y-%m-%d")}).eq("pf_id", p_id_input).execute()
-                         st.success("✅ 帳號認領成功！")
-                    else:
-                         try:
+                    try:
+                        exist = supabase.table("Members").select("*").eq("pf_id", p_id_input).execute()
+                        if exist.data and (not exist.data[0]['password']):
+                             supabase.table("Members").update({"name": rn, "password": rpw, "role": "玩家", "join_date": datetime.now().strftime("%Y-%m-%d")}).eq("pf_id", p_id_input).execute()
+                             st.success("✅ 帳號認領成功！")
+                        else:
                              supabase.table("Members").insert({"pf_id": p_id_input, "name": rn, "role": "玩家", "xp": 0, "password": rpw, "join_date": datetime.now().strftime("%Y-%m-%d")}).execute()
                              st.success("✅ 註冊成功！")
-                         except: st.error("❌ 該 ID 已被註冊。")
+                    except: st.error("❌ 該 ID 已被註冊或系統繁忙。")
                 else: st.error("請輸入暱稱")
 
     if st.session_state.player_id:
-        if st.button("🚪 退出王國"): st.session_state.player_id = None; st.query_params.clear(); st.rerun()
+        if st.button("🚪 退出王國"): 
+            st.session_state.player_id = None
+            if 'user_data' in st.session_state: del st.session_state.user_data
+            st.query_params.clear()
+            st.rerun()
 
-lb_title_1, lb_title_2, ci_min, ci_max = init_flagship_ui()
+# [修復] 這裡解包 13 個變數，解決 ValueError
+m_bg, m_title, m_subtitle, m_desc1, m_desc2, m_desc3, lb_title_1, lb_title_2, m_txt, m_spd, m_mode, ci_min, ci_max = init_flagship_ui()
 
 if not st.session_state.player_id: st.stop()
 
@@ -416,10 +346,12 @@ t_p = st.tabs(["🪪 排位/VIP", "🎯 任務", "🎮 遊戲大廳", "🛒 商�
 nick_cost = int(get_config('nickname_cost', "500"))
 
 with t_p[0]: # 排位卡
-    h_res = supabase.table("Leaderboard").select("hero_points").eq("player_id", st.session_state.player_id).execute()
-    h_pts = h_res.data[0]['hero_points'] if h_res.data else 0
-    m_res = supabase.table("Monthly_God").select("monthly_points").eq("player_id", st.session_state.player_id).execute()
-    m_pts = m_res.data[0]['monthly_points'] if m_res.data else 0
+    try:
+        h_res = safe_execute(supabase.table("Leaderboard").select("hero_points").eq("player_id", st.session_state.player_id))
+        h_pts = h_res.data[0]['hero_points'] if h_res and h_res.data else 0
+        m_res = safe_execute(supabase.table("Monthly_God").select("monthly_points").eq("player_id", st.session_state.player_id))
+        m_pts = m_res.data[0]['monthly_points'] if m_res and m_res.data else 0
+    except: h_pts=0; m_pts=0
     
     player_rank_title = get_rank_v2500(h_pts)
     vip_lvl = int(u_row.get('vip_level', 0) or 0)
@@ -456,8 +388,8 @@ with t_p[0]: # 排位卡
             update_user_xp(st.session_state.player_id, bonus)
             st.session_state.user_data['last_checkin'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            threading.Thread(target=lambda: supabase.table("Members").update({"last_checkin": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}).eq("pf_id", st.session_state.player_id).execute()).start()
-            threading.Thread(target=lambda: supabase.table("Prizes").insert({"player_id": st.session_state.player_id, "prize_name": f"{bonus} XP", "status": "自動入帳", "time": datetime.now().isoformat(), "source": "DailyCheckIn"}).execute()).start()
+            threading.Thread(target=lambda: safe_execute(supabase.table("Members").update({"last_checkin": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}).eq("pf_id", st.session_state.player_id))).start()
+            threading.Thread(target=lambda: safe_execute(supabase.table("Prizes").insert({"player_id": st.session_state.player_id, "prize_name": f"{bonus} XP", "status": "自動入帳", "time": datetime.now().isoformat(), "source": "DailyCheckIn"}))).start()
             
             st.success(f"✅ 簽到成功！獲得 {bonus} XP"); st.rerun()
 
@@ -479,18 +411,22 @@ with t_p[0]: # 排位卡
 
 with t_p[1]: # 任務
     st.subheader("🎯 任務中心")
-    missions = supabase.table("Missions").select("*").eq("status", "Active").execute().data
-    for m in missions:
-        is_met, is_claimed, cur_val = check_mission_status(st.session_state.player_id, m['type'], m['target_criteria'], m['target_value'], m['id'])
-        c1, c2 = st.columns([4, 1])
-        c1.markdown(f"""<div class="mission-card"><div><div class="mission-title">{m['title']}</div><div class="mission-desc">{m['description']} (進度: {cur_val}/{m['target_value']})</div></div><div class="mission-reward">+{m['reward_xp']} XP</div></div>""", unsafe_allow_html=True)
-        if is_claimed: c2.button("已領取", key=f"mc_{m['id']}", disabled=True)
-        elif is_met:
-            if c2.button("領取", key=f"m_{m['id']}"):
-                update_user_xp(st.session_state.player_id, m['reward_xp'])
-                supabase.table("Mission_Logs").insert({"player_id": st.session_state.player_id, "mission_id": m['id'], "claim_time": datetime.now().isoformat()}).execute()
-                st.success("已領取"); st.rerun()
-        else: c2.button("未達成", key=f"ml_{m['id']}", disabled=True)
+    try:
+        missions = safe_execute(supabase.table("Missions").select("*").eq("status", "Active")).data
+    except: missions = []
+    
+    if missions:
+        for m in missions:
+            is_met, is_claimed, cur_val = check_mission_status(st.session_state.player_id, m['type'], m['target_criteria'], m['target_value'], m['id'])
+            c1, c2 = st.columns([4, 1])
+            c1.markdown(f"""<div class="mission-card"><div><div class="mission-title">{m['title']}</div><div class="mission-desc">{m['description']} (進度: {cur_val}/{m['target_value']})</div></div><div class="mission-reward">+{m['reward_xp']} XP</div></div>""", unsafe_allow_html=True)
+            if is_claimed: c2.button("已領取", key=f"mc_{m['id']}", disabled=True)
+            elif is_met:
+                if c2.button("領取", key=f"m_{m['id']}"):
+                    update_user_xp(st.session_state.player_id, m['reward_xp'])
+                    safe_execute(supabase.table("Mission_Logs").insert({"player_id": st.session_state.player_id, "mission_id": m['id'], "claim_time": datetime.now().isoformat()}))
+                    st.success("已領取"); st.rerun()
+            else: c2.button("未達成", key=f"ml_{m['id']}", disabled=True)
 
 with t_p[2]: # 遊戲大廳
     st.markdown(f'<div class="xp-bar">💰 餘額: {u_row["xp"]:,} XP</div>', unsafe_allow_html=True)
@@ -612,7 +548,7 @@ with t_p[2]: # 遊戲大廳
              p_lvl = rank_to_level(player_rank_title)
              
              try:
-                 inv_res = supabase.table("Inventory").select("*").gt("stock", 0).in_("target_market", ["Wheel", "Both"]).execute()
+                 inv_res = safe_execute(supabase.table("Inventory").select("*").gt("stock", 0).in_("target_market", ["Wheel", "Both"]))
                  all_items = pd.DataFrame(inv_res.data)
              except: all_items = pd.DataFrame()
              
@@ -725,6 +661,16 @@ with t_p[2]: # 遊戲大廳
                     if c2.button("✋ 停牌"):
                         while hand_val(st.session_state.bj_d) < 17:
                              st.session_state.bj_d.append(st.session_state.bj_deck.pop())
+                        d_final = hand_val(st.session_state.bj_d)
+                        win = 0
+                        if d_final > 21 or p_val > d_final: win = 2
+                        elif p_val == d_final: win = 1
+                        
+                        if win > 0:
+                            amt = int(st.session_state.bj_bet * win)
+                            update_user_xp(st.session_state.player_id, amt)
+                            st.success(f"贏了 {amt} XP!")
+                        else: st.error("莊家勝")
                         st.session_state.bj_game_over = True
                         st.rerun()
                 else:
@@ -756,7 +702,7 @@ with t_p[2]: # 遊戲大廳
             if 'bacc_bets' not in st.session_state: st.session_state.bacc_bets = {"P":0, "B":0, "T":0, "PP":0, "BP":0}
             
             try:
-                b_state = supabase.table("Baccarat_Global").select("*").eq("id", 1).execute().data[0]
+                b_state = safe_execute(supabase.table("Baccarat_Global").select("*").eq("id", 1)).data[0]
                 hist_str = b_state['history_string'] if b_state['history_string'] else ""
                 hist_list = hist_str.split(',') if hist_str else []
             except: hist_list = []
@@ -859,7 +805,7 @@ with t_p[2]: # 遊戲大廳
                     new_entry = f"{winner}{p_val if winner=='P' else b_val}"
                     new_hist = (hist_list + [new_entry])[-60:]
                     
-                    supabase.table("Baccarat_Global").update({"hand_count": len(new_hist), "history_string": ",".join(new_hist)}).eq("id", 1).execute()
+                    safe_execute(supabase.table("Baccarat_Global").update({"hand_count": len(new_hist), "history_string": ",".join(new_hist)}).eq("id", 1))
                     
                     log_game_transaction(st.session_state.player_id, 'baccarat', 'BET', total_bet)
                     if pot_win > 0: log_game_transaction(st.session_state.player_id, 'baccarat', 'WIN', pot_win)
@@ -899,7 +845,7 @@ with t_p[2]: # 遊戲大廳
             st.subheader("🔴 俄羅斯輪盤 (Roulette)")
             
             try:
-                r_state = supabase.table("Roulette_Global").select("*").eq("id", 1).execute().data[0]
+                r_state = safe_execute(supabase.table("Roulette_Global").select("*").eq("id", 1)).data[0]
                 hist_str = r_state['history_string'] if r_state['history_string'] else ""
                 hist_list = hist_str.split(',') if hist_str else []
             except: hist_list = []
@@ -965,8 +911,8 @@ with t_p[2]: # 遊戲大廳
                         if t.isdigit() and int(t) == final_num: is_win = True; mult = 36
                         elif t == "紅色" and final_num in red_nums: is_win = True; mult = 2
                         elif t == "黑色" and final_num not in red_nums and final_num != 0: is_win = True; mult = 2
-                        elif t == "單數" and final_num != 0 and final_num % 2 != 0: is_win = True; mult = 2
-                        elif t == "雙數" and final_num != 0 and final_num % 2 == 0: is_win = True; mult = 2
+                        elif t == "Odd" and final_num%2!=0: is_win = True; mult = 2
+                        elif t == "Even" and final_num%2==0 and final_num!=0: is_win = True; mult = 2
                         
                         if is_win: total_win += a * mult
                     
@@ -983,7 +929,7 @@ with t_p[2]: # 遊戲大廳
                     
                     new_hist_list = [str(final_num)] + hist_list[:39] 
                     new_hist_str = ",".join(new_hist_list)
-                    supabase.table("Roulette_Global").update({"history_string": new_hist_str}).eq("id", 1).execute()
+                    safe_execute(supabase.table("Roulette_Global").update({"history_string": new_hist_str}).eq("id", 1))
                     
                     log_game_transaction(st.session_state.player_id, 'roulette', 'BET', total_bet)
                     if total_win > 0: log_game_transaction(st.session_state.player_id, 'roulette', 'WIN', total_win)
@@ -1037,7 +983,7 @@ with t_p[2]: # 遊戲大廳
 with t_p[3]: # 商城
     st.subheader("🛒 商城")
     try:
-        inv_res = supabase.table("Inventory").select("*").gt("stock", 0).in_("target_market", ["Mall", "Both"]).order("item_value", desc=True).execute()
+        inv_res = safe_execute(supabase.table("Inventory").select("*").gt("stock", 0).in_("target_market", ["Mall", "Both"]).order("item_value", desc=True))
         items = pd.DataFrame(inv_res.data)
     except: items = pd.DataFrame()
     
@@ -1101,7 +1047,7 @@ with t_p[3]: # 商城
 with t_p[4]: # 背包
     st.subheader("🎒 背包")
     try:
-        pz_res = supabase.table("Prizes").select("*").eq("player_id", st.session_state.player_id).not_.ilike("source", "GameWin%").order("id", desc=True).execute()
+        pz_res = safe_execute(supabase.table("Prizes").select("*").eq("player_id", st.session_state.player_id).not_.ilike("source", "GameWin%").order("id", desc=True))
         prizes = pd.DataFrame(pz_res.data)
     except: prizes = pd.DataFrame()
     
@@ -1123,7 +1069,7 @@ with t_p[5]: # 榜單
     with c_lb1:
         st.markdown(f"<div class='glory-title'>{lb_title_1}</div>", unsafe_allow_html=True)
         try:
-            lb_res = supabase.table("Leaderboard").select("player_id, hero_points").neq("player_id", "330999").order("hero_points", desc=True).limit(20).execute()
+            lb_res = safe_execute(supabase.table("Leaderboard").select("player_id, hero_points").neq("player_id", "330999").order("hero_points", desc=True).limit(20))
             lb_data = lb_res.data
         except: lb_data = []
         
@@ -1136,7 +1082,7 @@ with t_p[5]: # 榜單
                 
                 p_name = row['player_id']
                 try:
-                    mem_q = supabase.table("Members").select("name").eq("pf_id", row['player_id']).execute()
+                    mem_q = safe_execute(supabase.table("Members").select("name").eq("pf_id", row['player_id']))
                     if mem_q.data: p_name = mem_q.data[0]['name']
                 except: pass
                 
@@ -1146,7 +1092,7 @@ with t_p[5]: # 榜單
     with c_lb2:
         st.markdown(f"<div class='glory-title'>{lb_title_2}</div>", unsafe_allow_html=True)
         try:
-            mg_res = supabase.table("Monthly_God").select("player_id, monthly_points").neq("player_id", "330999").order("monthly_points", desc=True).limit(20).execute()
+            mg_res = safe_execute(supabase.table("Monthly_God").select("player_id, monthly_points").neq("player_id", "330999").order("monthly_points", desc=True).limit(20))
             mg_data = mg_res.data
         except: mg_data = []
         
@@ -1158,7 +1104,7 @@ with t_p[5]: # 榜單
                 
                 p_name = row['player_id']
                 try:
-                    mem_q = supabase.table("Members").select("name").eq("pf_id", row['player_id']).execute()
+                    mem_q = safe_execute(supabase.table("Members").select("name").eq("pf_id", row['player_id']))
                     if mem_q.data: p_name = mem_q.data[0]['name']
                 except: pass
 
@@ -1175,7 +1121,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         target = st.text_input("玩家 ID")
         if target:
             try:
-                pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
+                pend_res = safe_execute(supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換"))
                 prizes_data = pend_res.data
             except: prizes_data = []
             
@@ -1184,7 +1130,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 p_names = list(set([p['prize_name'] for p in prizes_data]))
                 if p_names:
                     try:
-                        inv_res = supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names).execute()
+                        inv_res = safe_execute(supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names))
                         inv_map = {i['item_name']: i for i in inv_res.data}
                     except: inv_map = {}
                 else: inv_map = {}
@@ -1213,7 +1159,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 else:
                     if st.button("確認核銷 (自動入帳)"):
                         if selected_item['vip_hours'] > 0:
-                            mem = supabase.table("Members").select("vip_level, vip_expiry").eq("pf_id", target).execute().data[0]
+                            mem = safe_execute(supabase.table("Members").select("vip_level, vip_expiry").eq("pf_id", target)).data[0]
                             c_lvl = mem.get('vip_level', 0)
                             c_exp = mem.get('vip_expiry')
                             now = datetime.now(); start_time = now
@@ -1250,7 +1196,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             if st.button("查詢歷史紀錄"):
                  hq_start = hd1.strftime("%Y-%m-%d 00:00:00"); hq_end = hd2.strftime("%Y-%m-%d 23:59:59")
                  try:
-                     logs_res = supabase.table("Staff_Logs").select("*").gte("time", hq_start).lte("time", hq_end).order("time", desc=True).execute()
+                     logs_res = safe_execute(supabase.table("Staff_Logs").select("*").gte("time", hq_start).lte("time", hq_end).order("time", desc=True))
                      st.dataframe(pd.DataFrame(logs_res.data))
                  except: st.error("查詢失敗")
                  
@@ -1298,7 +1244,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             st.markdown("---")
             st.write("📋 **架上商品列表 (可編輯/刪除)**")
             try:
-                inv_res = supabase.table("Inventory").select("*").execute()
+                inv_res = safe_execute(supabase.table("Inventory").select("*"))
                 inv_data = inv_res.data
             except: inv_data = []
             
@@ -1335,7 +1281,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         q = st.text_input("查詢玩家 ID", key="query_lookup_id_2")
         if q:
             try:
-                mem_res = supabase.table("Members").select("*").eq("pf_id", q).execute()
+                mem_res = safe_execute(supabase.table("Members").select("*").eq("pf_id", q))
                 mem_data = mem_res.data
             except: mem_data = []
             
@@ -1354,7 +1300,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 
                 # Check contribution
                 try:
-                    tr_res = supabase.table("Tournament_Records").select("actual_fee").eq("player_id", q).execute()
+                    tr_res = safe_execute(supabase.table("Tournament_Records").select("actual_fee").eq("player_id", q))
                     total_contribution = sum(r['actual_fee'] for r in tr_res.data)
                 except: total_contribution = 0
                 st.markdown(f"**生涯總貢獻 (淨利): {total_contribution:,}**")
@@ -1375,13 +1321,13 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
 
                 with st.expander("🎰 近 20 場遊戲紀錄"):
                     try:
-                        gw = supabase.table("Prizes").select("source, prize_name, time").eq("player_id", q).ilike("source", "GameWin%").order("id", desc=True).limit(20).execute()
+                        gw = safe_execute(supabase.table("Prizes").select("source, prize_name, time").eq("player_id", q).ilike("source", "GameWin%").order("id", desc=True).limit(20))
                         st.table(pd.DataFrame(gw.data))
                     except: pass
                 
                 with st.expander("🎒 背包庫存"):
                     try:
-                        bp = supabase.table("Prizes").select("prize_name, status, expire_at").eq("player_id", q).eq("status", "待兌換").order("id", desc=True).execute()
+                        bp = safe_execute(supabase.table("Prizes").select("prize_name, status, expire_at").eq("player_id", q).eq("status", "待兌換").order("id", desc=True))
                         st.table(pd.DataFrame(bp.data))
                     except: pass
 
@@ -1397,14 +1343,14 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             if tid: target_ids = [tid]
         elif target_group == "全體玩家":
             try:
-                res = supabase.table("Members").select("pf_id").execute()
+                res = safe_execute(supabase.table("Members").select("pf_id"))
                 target_ids = [r['pf_id'] for r in res.data]
             except: pass
         else:
             if "VIP" in target_group:
                 lvl = int(target_group.split(" ")[2])
                 try:
-                    res = supabase.table("Members").select("pf_id").eq("vip_level", lvl).execute()
+                    res = safe_execute(supabase.table("Members").select("pf_id").eq("vip_level", lvl))
                     target_ids = [r['pf_id'] for r in res.data]
                 except: pass
             
@@ -1415,7 +1361,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         vp = c_vp.number_input("VIP 點數", 0)
         
         try:
-            inv_list = supabase.table("Inventory").select("item_name").execute()
+            inv_list = safe_execute(supabase.table("Inventory").select("item_name"))
             it_opts = ["無"] + [i['item_name'] for i in inv_list.data]
         except: it_opts = ["無"]
         it = c_it.selectbox("禮物 (庫存)", it_opts)
@@ -1426,7 +1372,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 for t in target_ids:
                     if xp or vp:
                         update_user_xp(t, xp)
-                        threading.Thread(target=lambda: supabase.table("Members").update({"vip_points": supabase.table("Members").select("vip_points").eq("pf_id", t).execute().data[0]['vip_points'] + vp}).eq("pf_id", t).execute()).start()
+                        threading.Thread(target=lambda: safe_execute(supabase.table("Members").update({"vip_points": supabase.table("Members").select("vip_points").eq("pf_id", t).execute().data[0]['vip_points'] + vp}).eq("pf_id", t))).start()
                     
                     if it != "無":
                          # Async prize insert
@@ -1443,7 +1389,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
 
         **💰 XP 獎勵公式 (全額回饋)：**
         `XP = 實際手續費`
-        *(不再扣除 10%，不含獎金)*
+        *(不含獎金，不乘10%)*
         """)
         
         up = st.file_uploader("上傳 CSV / Excel")
@@ -1463,7 +1409,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 df.columns = df.columns.str.strip()
                 
                 try:
-                    chk = supabase.table("Import_History").select("filename").eq("filename", fn).execute()
+                    chk = safe_execute(supabase.table("Import_History").select("filename").eq("filename", fn))
                     if chk.data:
                         st.error(f"❌ 檔案 {fn} 已被匯入過！"); st.stop()
                 except: pass
@@ -1483,9 +1429,9 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     pid = str(r['ID']); raw_name = str(r['Nickname']); name = raw_name[:10]
                     # Ensure Member exists
                     try:
-                        mem = supabase.table("Members").select("pf_id").eq("pf_id", pid).execute()
+                        mem = safe_execute(supabase.table("Members").select("pf_id").eq("pf_id", pid))
                         if not mem.data:
-                            supabase.table("Members").insert({"pf_id": pid, "name": name, "role": "玩家", "xp": 0}).execute()
+                            safe_execute(supabase.table("Members").insert({"pf_id": pid, "name": name, "role": "玩家", "xp": 0}))
                     except: pass
                     
                     rank = int(r['Rank'])
@@ -1501,7 +1447,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     total_service_fee_gross = base * ents
                     actual_fee = max(0, total_service_fee_gross - discounts)
                     
-                    # [修正] XP = 實際手續費 (完全不含獎金，100% 回饋)
+                    # [修正] XP = 實際手續費 (100% 全額回饋，不含 Payout)
                     xp_reward = actual_fee
                     update_user_xp(pid, xp_reward)
                     
@@ -1511,25 +1457,25 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     
                     # 雙榜同步更新
                     try:
-                        cur_h = supabase.table("Leaderboard").select("hero_points").eq("player_id", pid).execute().data[0]['hero_points']
-                        supabase.table("Leaderboard").update({"hero_points": cur_h + pts}).eq("player_id", pid).execute()
+                        cur_h = safe_execute(supabase.table("Leaderboard").select("hero_points").eq("player_id", pid)).data[0]['hero_points']
+                        safe_execute(supabase.table("Leaderboard").update({"hero_points": cur_h + pts}).eq("player_id", pid))
                     except:
-                        supabase.table("Leaderboard").insert({"player_id": pid, "hero_points": pts}).execute()
+                        safe_execute(supabase.table("Leaderboard").insert({"player_id": pid, "hero_points": pts}))
                         
                     try:
-                        cur_m = supabase.table("Monthly_God").select("monthly_points").eq("player_id", pid).execute().data[0]['monthly_points']
-                        supabase.table("Monthly_God").update({"monthly_points": cur_m + pts}).eq("player_id", pid).execute()
+                        cur_m = safe_execute(supabase.table("Monthly_God").select("monthly_points").eq("player_id", pid)).data[0]['monthly_points']
+                        safe_execute(supabase.table("Monthly_God").update({"monthly_points": cur_m + pts}).eq("player_id", pid))
                     except:
-                        supabase.table("Monthly_God").insert({"player_id": pid, "monthly_points": pts}).execute()
+                        safe_execute(supabase.table("Monthly_God").insert({"player_id": pid, "monthly_points": pts}))
                     
                     # Log
-                    supabase.table("Tournament_Records").insert({
+                    safe_execute(supabase.table("Tournament_Records").insert({
                         "player_id": pid, "buy_in": buy, "rank": rank, "re_entries": re_e, "payout": payout, "filename": fn,
                         "actual_fee": actual_fee,
                         "time": datetime.now().isoformat()
-                    }).execute()
+                    }))
                 
-                supabase.table("Import_History").insert({"filename": fn, "import_time": datetime.now().isoformat()}).execute()
+                safe_execute(supabase.table("Import_History").insert({"filename": fn, "import_time": datetime.now().isoformat()}))
                 st.balloons(); st.success(f"✅ 成功匯入 {fn}")
 
             except Exception as e: st.error(f"匯入失敗: {e}")
@@ -1585,7 +1531,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             scheme = st.selectbox("結算方案", ["方案A: 全扣150", "方案B: 扣10%", "軟重置: 保留40%"])
             if st.button("執行賽季結算"):
                 try:
-                    all_lb = supabase.table("Leaderboard").select("*").neq("player_id", "330999").execute().data
+                    all_lb = safe_execute(supabase.table("Leaderboard").select("*").neq("player_id", "330999")).data
                     for p in all_lb:
                         old_pts = p['hero_points']
                         new_pts = old_pts
@@ -1593,7 +1539,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                         elif "方案B" in scheme: new_pts = int(old_pts * 0.9)
                         elif "軟重置" in scheme: new_pts = int(old_pts * 0.4)
                         
-                        supabase.table("Leaderboard").update({"hero_points": new_pts}).eq("player_id", p['player_id']).execute()
+                        safe_execute(supabase.table("Leaderboard").update({"hero_points": new_pts}).eq("player_id", p['player_id']))
                     st.success("賽季結算完成")
                 except: st.error("結算失敗")
 
@@ -1606,18 +1552,18 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             if c3.button("執行調整"):
                 try:
                     # 雙榜調整
-                    cur_h = supabase.table("Leaderboard").select("hero_points").eq("player_id", god_pid).execute().data[0]['hero_points']
-                    supabase.table("Leaderboard").update({"hero_points": cur_h + god_pts}).eq("player_id", god_pid).execute()
+                    cur_h = safe_execute(supabase.table("Leaderboard").select("hero_points").eq("player_id", god_pid)).data[0]['hero_points']
+                    safe_execute(supabase.table("Leaderboard").update({"hero_points": cur_h + god_pts}).eq("player_id", god_pid))
                     
-                    cur_m = supabase.table("Monthly_God").select("monthly_points").eq("player_id", god_pid).execute().data[0]['monthly_points']
-                    supabase.table("Monthly_God").update({"monthly_points": cur_m + god_pts}).eq("player_id", god_pid).execute()
+                    cur_m = safe_execute(supabase.table("Monthly_God").select("monthly_points").eq("player_id", god_pid)).data[0]['monthly_points']
+                    safe_execute(supabase.table("Monthly_God").update({"monthly_points": cur_m + god_pts}).eq("player_id", god_pid))
                     st.success("已調整")
                 except: st.error("玩家不存在或無積分紀錄")
             
             if c4.button("💥 歸零重置"):
                 try:
-                    supabase.table("Leaderboard").update({"hero_points": 0}).eq("player_id", god_pid).execute()
-                    supabase.table("Monthly_God").update({"monthly_points": 0}).eq("player_id", god_pid).execute()
+                    safe_execute(supabase.table("Leaderboard").update({"hero_points": 0}).eq("player_id", god_pid))
+                    safe_execute(supabase.table("Monthly_God").update({"monthly_points": 0}).eq("player_id", god_pid))
                     st.success("已歸零")
                 except: st.error("歸零失敗")
 
@@ -1635,17 +1581,17 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 
                 inv_items = ["無"]
                 try: 
-                    inv = supabase.table("Inventory").select("item_name").execute().data
+                    inv = safe_execute(supabase.table("Inventory").select("item_name")).data
                     inv_items += [i['item_name'] for i in inv]
                 except: pass
                 it = st.selectbox("獎勵物品", inv_items)
                 
                 if st.form_submit_button("新增"):
                     item_val = None if it == "無" else it
-                    supabase.table("Missions").insert({
+                    safe_execute(supabase.table("Missions").insert({
                         "title": t, "description": d, "reward_xp": xp, "type": tp, 
                         "target_criteria": cr, "target_value": val, "status": "Active", "reward_item": item_val
-                    }).execute()
+                    }))
                     st.success("任務已新增")
 
         # [新增] 老闆一鍵重置
@@ -1653,10 +1599,10 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             st.write("---")
             st.markdown("### 🧨 危險區域")
             if st.button("🔥 刪除所有玩家數據 (保留老闆)", type="primary"):
-                supabase.table("Prizes").delete().neq("player_id", "330999").execute()
-                supabase.table("Game_Transactions").delete().neq("player_id", "330999").execute()
-                supabase.table("Leaderboard").delete().neq("player_id", "330999").execute()
-                supabase.table("Monthly_God").delete().neq("player_id", "330999").execute()
-                supabase.table("Mission_Logs").delete().neq("player_id", "330999").execute()
-                supabase.table("Members").delete().neq("pf_id", "330999").execute()
+                safe_execute(supabase.table("Prizes").delete().neq("player_id", "330999"))
+                safe_execute(supabase.table("Game_Transactions").delete().neq("player_id", "330999"))
+                safe_execute(supabase.table("Leaderboard").delete().neq("player_id", "330999"))
+                safe_execute(supabase.table("Monthly_God").delete().neq("player_id", "330999"))
+                safe_execute(supabase.table("Mission_Logs").delete().neq("player_id", "330999"))
+                safe_execute(supabase.table("Members").delete().neq("pf_id", "330999"))
                 st.toast("💥 所有測試數據已清除！")
