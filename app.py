@@ -75,7 +75,6 @@ def init_flagship_ui():
     if m_mode == 'auto':
         try:
             th_xp = int(get_config('marquee_th_xp', "5000"))
-            # 查詢最近的中獎紀錄 (Limit 20)
             res = supabase.table("Prizes").select("player_id, prize_name, source").order("id", desc=True).limit(20).execute()
             
             found_news = False
@@ -87,7 +86,6 @@ def init_flagship_ui():
                 if "大獎" in str(p_name) or "iPhone" in str(p_name): is_big_win = True
 
                 if is_big_win:
-                    # 查詢玩家名稱
                     mem_res = supabase.table("Members").select("name").eq("pf_id", row['player_id']).execute()
                     p_real_name = mem_res.data[0]['name'] if mem_res.data else row['player_id']
                     m_txt = f"🎉 恭喜玩家 【{p_real_name}】 在 {row['source']} 中獲得大獎：{p_name}！ 🔥"
@@ -233,7 +231,7 @@ def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
     if not m_res.data: return False, False, 0
     m_row = m_res.data[0]
     
-    if m_row['time_limit_months'] > 0:
+    if m_row.get('time_limit_months', 0) > 0:
         mem = supabase.table("Members").select("join_date").eq("pf_id", player_id).execute()
         if mem.data and mem.data[0]['join_date']:
              try:
@@ -244,7 +242,7 @@ def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
     start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
     if m_type == "Weekly": start_time = now - timedelta(days=now.weekday())
     elif m_type == "Monthly": start_time = now.replace(day=1)
-    elif m_type == "Season": start_time = datetime(2000, 1, 1) 
+    elif m_type == "Season": start_time = datetime(2020, 1, 1) 
     
     claimed = False
     log_res = supabase.table("Mission_Logs").select("claim_time").eq("player_id", player_id).eq("mission_id", mission_id).order("claim_time", desc=True).limit(1).execute()
@@ -252,7 +250,7 @@ def check_mission_status(player_id, m_type, criteria, target_val, mission_id):
         last_claim_str = log_res.data[0]['claim_time']
         try:
             last_claim = datetime.fromisoformat(last_claim_str.replace('Z', '+00:00')).replace(tzinfo=None)
-            if m_row['recurring_months'] > 0:
+            if m_row.get('recurring_months', 0) > 0:
                  if (now - last_claim).days < (m_row['recurring_months'] * 30): claimed = True
             else:
                  if last_claim >= start_time: claimed = True
@@ -337,18 +335,28 @@ with st.sidebar:
     
     u_chk = None
     if p_id_input:
-        res = supabase.table("Members").select("role, password").eq("pf_id", p_id_input).execute()
+        res = supabase.table("Members").select("role, password, ban_until").eq("pf_id", p_id_input).execute()
         if res.data:
             u_chk = res.data[0]
             
     invite_cfg = get_config('reg_invite_code', "888")
     
     if p_id_input and u_chk:
-        login_pw = st.text_input("密碼", type="password", key="sidebar_pw")
-        if st.button("登入Pro撲克殿堂"):
-            if login_pw == u_chk['password']:
-                st.session_state.player_id = p_id_input; st.session_state.access_level = u_chk['role']; st.query_params["token"] = p_id_input; st.rerun()
-            else: st.error("❌ 密碼錯誤")
+        ban_msg = ""
+        if u_chk.get('ban_until'):
+            try:
+                ban_str = str(u_chk['ban_until']).split('.')[0]
+                bt = datetime.strptime(ban_str, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() < bt: ban_msg = f"🚫 帳號封禁中 (至 {u_chk['ban_until']})"
+            except: pass
+            
+        if ban_msg: st.error(ban_msg)
+        else:
+            login_pw = st.text_input("密碼", type="password", key="sidebar_pw")
+            if st.button("登入Pro撲克殿堂"):
+                if login_pw == u_chk['password']:
+                    st.session_state.player_id = p_id_input; st.session_state.access_level = u_chk['role']; st.query_params["token"] = p_id_input; st.rerun()
+                else: st.error("❌ 密碼錯誤")
     elif p_id_input:
         with st.form("reg_sidebar"):
             st.info("⚠️ 首次註冊：系統將自動檢查是否為比賽匯入的 ID。")
@@ -550,7 +558,8 @@ with t_p[1]: # 🎯 任務
                 
                 if m['reward_item']: reward_txt = f"🎁 {m['reward_item']}"
                 recur_txt = ""
-                if m['recurring_months'] > 0 and is_claimed: recur_txt = f"(冷卻中: {m['recurring_months']} 個月後可再次領取)"
+                if m.get('recurring_months', 0) > 0 and is_claimed: recur_txt = f"(冷卻中: {m['recurring_months']} 個月後可再次領取)"
+                
                 col_m1, col_m2 = st.columns([8, 2])
                 with col_m1:
                     st.markdown(f"""<div class="mission-card"><div><div class="mission-title">{m['title']} {recur_txt}</div><div class="mission-desc">{m['description']} (進度: {cur_val}/{m['target_value']})</div></div><div class="mission-reward">{reward_txt}</div></div>""", unsafe_allow_html=True)
@@ -625,6 +634,7 @@ with t_p[2]: # 🎮 遊戲大廳
     else:
         if st.button("⬅️ 返回大廳", key="back_to_lobby"): st.session_state.current_game = 'lobby'; st.rerun()
 
+        # [CLOUD] Mines Logic
         if st.session_state.current_game == 'mines':
             st.subheader("💣 撲洛掃雷")
             if 'mines_active' not in st.session_state: st.session_state.mines_active = False
@@ -692,6 +702,7 @@ with t_p[2]: # 🎮 遊戲大廳
             else:
                 st.warning("遊戲狀態重置中...請稍後"); st.session_state.mines_revealed = [False]*25; st.rerun()
         
+        # [CLOUD] Wheel Logic
         elif st.session_state.current_game == 'wheel':
              st.subheader("🎡 撲洛幸運大轉盤 (小瑪莉)")
              wheel_cost = int(get_config('min_bet_wheel', "100"))
@@ -1216,7 +1227,7 @@ with t_p[5]: # 榜單
     with ldf1:
         st.markdown(f"<div class='glory-title'>{lb_title_1}</div>", unsafe_allow_html=True)
         # Join Leaderboard and Members
-        lb_res = supabase.table("Leaderboard").select("player_id, hero_points, Members(name, role)").neq("player_id", "330999").order("hero_points", desc=True).limit(20).execute()
+        lb_res = supabase.table("Leaderboard").select("player_id, hero_points, Members(name)").neq("player_id", "330999").order("hero_points", desc=True).limit(20).execute()
         
         if lb_res.data:
             for i, row in enumerate(lb_res.data):
@@ -1224,19 +1235,384 @@ with t_p[5]: # 榜單
                 badge = "👑" if rank_num == 1 else ("🥈" if rank_num == 2 else ("🥉" if rank_num == 3 else f"#{rank_num}"))
                 style_class = "lb-rank-1" if rank_num == 1 else ("lb-rank-2" if rank_num == 2 else ("lb-rank-3" if rank_num == 3 else "lb-rank-norm"))
                 curr_rank = get_rank_v2500(row['hero_points'])
-                p_name = row['Members']['name'] if row['Members'] else row['player_id']
+                p_name = row['Members']['name'] if row.get('Members') else row['player_id']
                 st.markdown(f"""<div class="lb-rank-card {style_class}"><div class="lb-badge">{badge}</div><div class="lb-info"><div class="lb-name">{p_name} <span style="font-size:0.8em;color:#DDD;">({curr_rank})</span></div><div class="lb-id">{row['player_id']}</div></div><div class="lb-score">{row['hero_points']}</div></div>""", unsafe_allow_html=True)
         else: st.info("暫無資料")
 
     with ldf2:
         st.markdown(f"<div class='glory-title'>{lb_title_2}</div>", unsafe_allow_html=True)
-        mg_res = supabase.table("Monthly_God").select("player_id, monthly_points, Members(name, role)").neq("player_id", "330999").order("monthly_points", desc=True).limit(20).execute()
+        mg_res = supabase.table("Monthly_God").select("player_id, monthly_points, Members(name)").neq("player_id", "330999").order("monthly_points", desc=True).limit(20).execute()
         
         if mg_res.data:
             for i, row in enumerate(mg_res.data):
                 rank_num = i + 1
                 badge = "👑" if rank_num == 1 else ("🥈" if rank_num == 2 else ("🥉" if rank_num == 3 else f"#{rank_num}"))
                 style_class = "lb-rank-1" if rank_num == 1 else ("lb-rank-2" if rank_num == 2 else ("lb-rank-3" if rank_num == 3 else "lb-rank-norm"))
-                p_name = row['Members']['name'] if row['Members'] else row['player_id']
+                p_name = row['Members']['name'] if row.get('Members') else row['player_id']
                 st.markdown(f"""<div class="lb-rank-card {style_class}"><div class="lb-badge">{badge}</div><div class="lb-info"><div class="lb-name">{p_name}</div><div class="lb-id">{row['player_id']}</div></div><div class="lb-score">{row['monthly_points']}</div></div>""", unsafe_allow_html=True)
         else: st.info("暫無資料")
+
+# --- 5. 指揮部 (Admin) ---
+if st.session_state.access_level in ["老闆", "店長", "員工"]:
+    st.write("---"); st.header("⚙️ 指揮部")
+    user_role = st.session_state.access_level
+    
+    tabs = st.tabs(["💰 櫃台與物資", "👥 人員與空投", "📊 賽事與數據", "🛠️ 系統與維護"])
+    
+    with tabs[0]: 
+        st.subheader("🛂 櫃台核銷")
+        target = st.text_input("玩家 ID")
+        if target:
+            # 1. Fetch pending prizes
+            pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
+            prizes_data = pend_res.data
+            
+            display_data = []
+            if prizes_data:
+                # 2. Collect distinct item names
+                p_names = list(set([p['prize_name'] for p in prizes_data]))
+                
+                # 3. Batch query inventory details (manual join to avoid APIError on missing relations)
+                inv_map = {}
+                if p_names:
+                    try:
+                        inv_res = supabase.table("Inventory").select("item_name, item_value, vip_card_level, vip_card_hours").in_("item_name", p_names).execute()
+                        inv_map = {i['item_name']: i for i in inv_res.data}
+                    except: pass
+                
+                # 4. Merge data
+                for p in prizes_data:
+                    p_name = p['prize_name']
+                    inv_info = inv_map.get(p_name, {}) 
+                    
+                    display_data.append({
+                        "id": p['id'], 
+                        "prize_name": p_name, 
+                        "item_value": inv_info.get('item_value', 0),
+                        "vip_level": inv_info.get('vip_card_level', 0),
+                        "vip_hours": inv_info.get('vip_card_hours', 0)
+                    })
+            
+            if display_data:
+                df_pend = pd.DataFrame(display_data)
+                st.table(df_pend)
+                redeem_id = st.selectbox("選擇核銷項目 ID", df_pend['id'].tolist())
+                max_val = int(get_config('max_redeem_val', "1000000"))
+                
+                selected_item = next((x for x in display_data if x['id'] == redeem_id), None)
+                
+                if user_role != "老闆" and selected_item['item_value'] > max_val:
+                    st.error(f"❌ 此物品價值 ({selected_item['item_value']}) 超過權限，請聯繫老闆。")
+                else:
+                    if st.button("確認核銷 (自動入帳)"):
+                        # VIP Logic
+                        if selected_item['vip_hours'] > 0:
+                            mem = supabase.table("Members").select("vip_level, vip_expiry").eq("pf_id", target).execute().data[0]
+                            c_lvl = mem.get('vip_level', 0)
+                            c_exp = mem.get('vip_expiry')
+                            now = datetime.now(); start_time = now
+                            
+                            if c_lvl == selected_item['vip_level'] and c_exp:
+                                try:
+                                    exp_dt = datetime.strptime(str(c_exp).split('.')[0], "%Y-%m-%d %H:%M:%S")
+                                    if exp_dt > now: start_time = exp_dt
+                                except: pass
+                            
+                            new_exp = (start_time + timedelta(hours=int(selected_item['vip_hours']))).strftime("%Y-%m-%d %H:%M:%S")
+                            supabase.table("Members").update({"vip_level": int(selected_item['vip_level']), "vip_expiry": new_exp}).eq("pf_id", target).execute()
+                            st.toast(f"💎 VIP 權益已開通至 {new_exp}")
+
+                        # XP Card Logic
+                        xp_match = re.search(r'(\d+)\s*XP', str(selected_item['prize_name']), re.IGNORECASE)
+                        if xp_match:
+                            add_xp = int(xp_match.group(1))
+                            cur_xp = supabase.table("Members").select("xp").eq("pf_id", target).execute().data[0]['xp']
+                            supabase.table("Members").update({"xp": cur_xp + add_xp}).eq("pf_id", target).execute()
+                            st.toast(f"💰 已自動儲值 {add_xp} XP")
+                        
+                        supabase.table("Prizes").update({"status": '已核銷'}).eq("id", redeem_id).execute()
+                        supabase.table("Staff_Logs").insert({"staff_id": st.session_state.player_id, "player_id": target, "prize_name": selected_item['prize_name'], "time": datetime.now().isoformat()}).execute()
+                        st.success("核銷作業完成！"); time.sleep(1); st.rerun()
+            else: st.info("該玩家無待核銷物品")
+            
+            if user_role == "老闆":
+                st.write("---"); st.subheader("💰 人工充值 (老闆限定)")
+                xp_add = st.number_input("充值 XP", step=100)
+                if st.button("執行充值"):
+                    cur_xp = supabase.table("Members").select("xp").eq("pf_id", target).execute().data[0]['xp']
+                    supabase.table("Members").update({"xp": cur_xp + xp_add}).eq("pf_id", target).execute()
+                    st.success("已充值")
+            
+            st.write("---"); st.subheader("📜 櫃台核銷歷史查詢")
+            hd1 = st.date_input("起始日期")
+            hd2 = st.date_input("結束日期")
+            if st.button("查詢歷史紀錄"):
+                 hq_start = hd1.strftime("%Y-%m-%d 00:00:00"); hq_end = hd2.strftime("%Y-%m-%d 23:59:59")
+                 logs_res = supabase.table("Staff_Logs").select("*").gte("time", hq_start).lte("time", hq_end).order("time", desc=True).execute()
+                 st.dataframe(pd.DataFrame(logs_res.data))
+                 
+                 if user_role == "老闆" and logs_res.data:
+                     if st.button("⚠️ 刪除此區間紀錄 (老闆權限)"):
+                         supabase.table("Staff_Logs").delete().gte("time", hq_start).lte("time", hq_end).execute()
+                         st.warning("紀錄已刪除")
+
+        st.write("---")
+        with st.expander("📦 商品上架與管理"):
+            st.write("#### 🛒 上架新商品")
+            c1, c2 = st.columns(2)
+            n = c1.text_input("商品名稱")
+            s = c2.number_input("庫存", 0, 9999, 10)
+            
+            c3, c4, c5 = st.columns(3)
+            v = c3.number_input("顯示市價 (僅參考)", 0)
+            w = c4.number_input("轉盤權重 (越大越容易中)", 0.0, 1000.0, 10.0)
+            mp = c5.number_input("商城售價 (XP)", 0)
+            
+            st.markdown("---")
+            is_vip = st.checkbox("👑 此商品為 VIP 權益卡")
+            v_lvl = 0; v_hrs = 0
+            if is_vip:
+                c_v1, c_v2 = st.columns(2)
+                v_lvl = c_v1.selectbox("設定 VIP 等級", [1, 2, 3, 4], format_func=lambda x: {1:"銅牌",2:"銀牌",3:"黃金",4:"鑽石"}[x])
+                v_hrs = c_v2.number_input("VIP 有效時數 (小時)", 1, 8760, 720)
+            
+            st.markdown("---")
+            img = st.text_input("圖片 URL (可留空)")
+            r_min = st.selectbox("購買排位限制", ["無限制", "🥈 白銀 (Silver)", "⬜ 白金 (Platinum)", "💎 鑽石 (Diamond)", "🎖️ 大師 (Master)", "🏆 菁英 (Challenger)"])
+            vp_price = st.number_input("VP 點數售價 (0 = 不開放 VP 購買)", 0)
+            target_m = st.selectbox("上架位置", ["Both", "Mall", "Wheel"])
+            
+            if st.button("確認上架商品"):
+                if n:
+                    supabase.table("Inventory").insert({
+                        "item_name": n, "stock": s, "item_value": v, "weight": w, "target_market": target_m,
+                        "mall_price": mp, "vip_card_level": v_lvl, "vip_card_hours": v_hrs,
+                        "img_url": img, "mall_min_rank": r_min, "vip_price": vp_price
+                    }).execute()
+                    st.success(f"✅ 商品 {n} 上架成功！"); time.sleep(1); st.rerun()
+                else: st.error("名稱不可為空")
+            
+            st.markdown("---")
+            st.write("📋 **架上商品列表 (可編輯/刪除)**")
+            inv_res = supabase.table("Inventory").select("*").execute()
+            if inv_res.data:
+                for mm in inv_res.data:
+                    with st.expander(f"{mm['item_name']} (庫存: {mm['stock']})"):
+                        c1, c2, c3, c4 = st.columns(4)
+                        new_p = c1.number_input(f"XP售價", value=int(mm['mall_price']), key=f"mm_p_{mm['item_name']}")
+                        new_vp = c2.number_input(f"VP售價", value=int(mm.get('vip_price', 0)), key=f"mm_vp_{mm['item_name']}")
+                        new_s = c3.number_input(f"庫存", value=mm['stock'], key=f"mm_s_{mm['item_name']}")
+                        
+                        r_idx = ["無限制", "🥈 白銀 (Silver)", "⬜ 白金 (Platinum)", "💎 鑽石 (Diamond)", "🎖️ 大師 (Master)", "🏆 菁英 (Challenger)"].index(mm.get('mall_min_rank', '無限制'))
+                        new_r = c4.selectbox(f"限制", ["無限制", "🥈 白銀 (Silver)", "⬜ 白金 (Platinum)", "💎 鑽石 (Diamond)", "🎖️ 大師 (Master)", "🏆 菁英 (Challenger)"], index=r_idx, key=f"mm_r_{mm['item_name']}")
+                        
+                        c5, c6, c7 = st.columns([2, 1, 1])
+                        new_u = c5.text_input("圖片", value=mm['img_url'], key=f"mm_u_{mm['item_name']}")
+                        new_st = c6.selectbox("狀態", ["上架中", "下架中"], index=0 if mm['status']=='上架中' else 1, key=f"mm_st_{mm['item_name']}")
+                        if c7.button(f"💾 保存", key=f"mm_up_{mm['item_name']}"):
+                            supabase.table("Inventory").update({
+                                "mall_price": new_p, "vip_price": new_vp, "stock": new_s, 
+                                "mall_min_rank": new_r, "img_url": new_u, "status": new_st
+                            }).eq("item_name", mm['item_name']).execute()
+                            st.success("已更新"); st.rerun()
+                        if st.button("刪除商品", key=f"mm_del_{mm['item_name']}"):
+                             supabase.table("Inventory").delete().eq("item_name", mm['item_name']).execute()
+                             st.success("Deleted"); st.rerun()
+
+    with tabs[1]: # 人員與空投
+        st.subheader("🔍 查閱與管理")
+        q = st.text_input("查詢玩家 ID", key="query_lookup_id_2")
+        if q:
+            mem_res = supabase.table("Members").select("*").eq("pf_id", q).execute()
+            if mem_res.data:
+                mem = mem_res.data[0]
+                st.markdown(f"""
+                <div class="lookup-result-box">
+                    <h3>👤 {mem['name']} (ID: {q})</h3>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr;">
+                        <div><span class="lookup-label">XP 餘額</span><br><span class="lookup-value">{mem['xp']:,.0f}</span></div>
+                        <div><span class="lookup-label">VIP 點數</span><br><span class="lookup-value">{mem['vip_points']:,.0f}</span></div>
+                        <div><span class="lookup-label">角色權限</span><br><span style="color:#FFD700;">{mem['role']}</span></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Check contribution
+                tr_res = supabase.table("Tournament_Records").select("actual_fee").eq("player_id", q).execute()
+                total_contribution = sum(r['actual_fee'] for r in tr_res.data)
+                st.markdown(f"**生涯總貢獻 (淨利): {total_contribution:,}**")
+
+                if user_role == "老闆":
+                    with st.expander("🚫 封禁管理"):
+                        if st.button("❌ 物理刪除玩家"):
+                            supabase.table("Members").delete().eq("pf_id", q).execute()
+                            supabase.table("Prizes").delete().eq("player_id", q).execute()
+                            supabase.table("Leaderboard").delete().eq("player_id", q).execute()
+                            st.error("已刪除"); st.rerun()
+                            
+                    with st.expander("👮 懲處：扣除玩家 XP"):
+                         deduct_xp = st.number_input("扣除數量", min_value=1, value=100, key="deduct_xp_val_2")
+                         if st.button("執行扣除", key="btn_deduct_xp_2"):
+                             supabase.table("Members").update({"xp": mem['xp'] - deduct_xp}).eq("pf_id", q).execute()
+                             st.success("已扣除"); st.rerun()
+
+                with st.expander("🎰 近 20 場遊戲紀錄"):
+                    gw = supabase.table("Prizes").select("source, prize_name, time").eq("player_id", q).ilike("source", "GameWin%").order("id", desc=True).limit(20).execute()
+                    st.table(pd.DataFrame(gw.data))
+                
+                with st.expander("🎒 背包庫存"):
+                    bp = supabase.table("Prizes").select("prize_name, status, expire_at").eq("player_id", q).eq("status", "待兌換").order("id", desc=True).execute()
+                    st.table(pd.DataFrame(bp.data))
+
+            else: st.error("無此人")
+
+        st.write("---")
+        st.subheader("🚀 物資空投")
+        target_group = st.selectbox("發送對象", ["單一玩家 ID", "全體玩家", "🏆 菁英", "🎖️ 大師", "💎 鑽石", "⬜ 白金", "🥈 白銀", "VIP 1 (銅)", "VIP 2 (銀)", "VIP 3 (金)", "VIP 4 (鑽)"])
+        
+        target_ids = []
+        if target_group == "單一玩家 ID":
+            tid = st.text_input("輸入玩家 ID")
+            if tid: target_ids = [tid]
+        elif target_group == "全體玩家":
+            res = supabase.table("Members").select("pf_id").execute()
+            target_ids = [r['pf_id'] for r in res.data]
+        else:
+            if "VIP" in target_group:
+                lvl = int(target_group.split(" ")[2])
+                res = supabase.table("Members").select("pf_id").eq("vip_level", lvl).execute()
+                target_ids = [r['pf_id'] for r in res.data]
+            
+        st.info(f"預計發送對象人數: {len(target_ids)} 人")
+        
+        c_xp, c_vp, c_it = st.columns(3)
+        xp = c_xp.number_input("XP 點數", 0)
+        vp = c_vp.number_input("VIP 點數", 0)
+        inv_list = supabase.table("Inventory").select("item_name").execute()
+        it = c_it.selectbox("禮物 (庫存)", ["無"] + [i['item_name'] for i in inv_list.data])
+        
+        if st.button("確認空投"):
+            if not target_ids: st.error("無目標")
+            else:
+                for t in target_ids:
+                    if xp or vp:
+                        mem = supabase.table("Members").select("xp, vip_points").eq("pf_id", t).execute().data[0]
+                        upd = {}
+                        if xp: upd["xp"] = mem['xp'] + xp
+                        if vp: upd["vip_points"] = mem['vip_points'] + vp
+                        supabase.table("Members").update(upd).eq("pf_id", t).execute()
+                    
+                    if it != "無":
+                         # Deduct stock
+                         cur_s = supabase.table("Inventory").select("stock").eq("item_name", it).execute().data[0]['stock']
+                         supabase.table("Inventory").update({"stock": cur_s - 1}).eq("item_name", it).execute()
+                         # Add prize
+                         supabase.table("Prizes").insert({
+                             "player_id": t, "prize_name": it, "status": '待兌換', 
+                             "time": datetime.now().isoformat(), "expire_at": "無期限", "source": '老闆空投'
+                         }).execute()
+                st.success("空投完成")
+
+    with tabs[2]: # 賽事與數據
+        st.subheader("📁 賽事精算導入"); up = st.file_uploader("上傳 CSV / Excel")
+        if up and st.button("執行精算"):
+            try:
+                fn = up.name; buy = int(re.search(r'(1200|3400|6600|11000|21500)', fn).group(1))
+                if fn.endswith('.csv'):
+                    try: df = pd.read_csv(up, encoding='utf-8-sig')
+                    except: 
+                        up.seek(0)
+                        df = pd.read_csv(up, encoding='big5')
+                else: df = pd.read_excel(up)
+                
+                df.columns = df.columns.str.strip()
+                
+                chk = supabase.table("Import_History").select("filename").eq("filename", fn).execute()
+                if chk.data:
+                    st.error(f"❌ 檔案 {fn} 已被匯入過！"); st.stop()
+                
+                matrix = {1200: (200, 0.75, [2, 1.5, 1]), 3400: (400, 1.5, [5, 4, 3]), 6600: (600, 2.0, [10, 8, 6]), 11000: (1000, 3.0, [20, 15, 10]), 21500: (1500, 5.0, [40, 30, 20])}
+                base, p_mult, bonuses = matrix.get(buy, (100, 1.0, [1, 1, 1]))
+                
+                for _, r in df.iterrows():
+                    pid = str(r['ID']); raw_name = str(r['Nickname']); name = raw_name[:10]
+                    # Ensure Member exists
+                    mem = supabase.table("Members").select("pf_id").eq("pf_id", pid).execute()
+                    if not mem.data:
+                        supabase.table("Members").insert({"pf_id": pid, "name": name, "role": "玩家", "xp": 0}).execute()
+                    
+                    rank = int(r['Rank'])
+                    re_e = int(r.get('Re-Entries', 0))
+                    payout = int(r.get('Payout', 0))
+                    
+                    # Update XP (simplified: update += payout)
+                    cur_xp = supabase.table("Members").select("xp").eq("pf_id", pid).execute().data[0]['xp']
+                    supabase.table("Members").update({"xp": cur_xp + payout}).eq("pf_id", pid).execute()
+                    
+                    # Calculate Points
+                    pts = 0
+                    if rank == 1: pts = bonuses[0]
+                    elif rank == 2: pts = bonuses[1]
+                    elif rank == 3: pts = bonuses[2]
+                    
+                    # Update Leaderboard
+                    lb_chk = supabase.table("Leaderboard").select("hero_points").eq("player_id", pid).execute()
+                    if lb_chk.data:
+                         supabase.table("Leaderboard").update({"hero_points": lb_chk.data[0]['hero_points'] + pts}).eq("player_id", pid).execute()
+                    else:
+                         supabase.table("Leaderboard").insert({"player_id": pid, "hero_points": pts}).execute()
+                    
+                    # Log
+                    supabase.table("Tournament_Records").insert({
+                        "player_id": pid, "buy_in": buy, "rank": rank, "re_entries": re_e, "payout": payout, "filename": fn,
+                        "actual_fee": (1 + re_e) * int(buy * 0.2), # Approx fee
+                        "time": datetime.now().isoformat()
+                    }).execute()
+                
+                supabase.table("Import_History").insert({"filename": fn, "import_time": datetime.now().isoformat()}).execute()
+                st.balloons(); st.success(f"✅ 成功匯入 {fn}")
+
+            except Exception as e: st.error(f"匯入失敗: {e}")
+
+    with tabs[3]: # 系統設定
+        st.subheader("⚙️ 遊戲參數微調")
+        
+        # Simple loop to generate UI for settings
+        settings_map = {
+            "marquee_text": "跑馬燈文字",
+            "marquee_speed": "跑馬燈速度 (秒)",
+            "welcome_title": "首頁大標題",
+            "rtp_blackjack": "21點 RTP (0.1~1.0)",
+            "rtp_roulette": "輪盤 RTP",
+            "rtp_baccarat": "百家樂 RTP"
+        }
+        
+        for k, v in settings_map.items():
+            curr = get_config(k, "")
+            new_val = st.text_input(v, value=curr)
+            if st.button(f"更新 {k}"):
+                set_config(k, new_val)
+                st.success("已更新")
+        
+        st.write("---")
+        st.markdown("**緊急開關**")
+        c1, c2, c3, c4 = st.columns(4)
+        if c1.button("🔥 重置所有排行榜"):
+            if st.checkbox("確認重置?"):
+                supabase.table("Leaderboard").delete().neq("player_id", "xxxx").execute() 
+                st.warning("排行榜已重置")
+
+        if c2.button("📅 重置月榜"):
+            if st.checkbox("確認重置月榜?", key="chk_m_god"):
+                supabase.table("Monthly_God").delete().neq("player_id", "xxxx").execute()
+                st.warning("✅ 月度戰神榜已重置歸零")
+
+        if c3.button("🧹 清空交易紀錄"):
+            if st.checkbox("確認清空?", key="chk_logs"):
+                supabase.table("Game_Transactions").delete().neq("id", 0).execute()
+                st.warning("✅ 所有遊戲交易紀錄已清空")
+
+        if c4.button("🔄 全域補貨(100)"):
+            if st.checkbox("確認補貨?", key="chk_stock"):
+                supabase.table("Inventory").update({"stock": 100}).gt("stock", -1).execute()
+                st.warning("✅ 所有商品庫存已重置為 100")
