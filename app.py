@@ -30,11 +30,10 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- 2. 核心設定與快取 ---
+# --- 2. 核心：快取與背景執行 ---
 
 @st.cache_data(ttl=60)
 def get_all_settings():
-    """快取系統設定"""
     try:
         response = supabase.table("System_Settings").select("*").execute()
         return {item['config_key']: item['config_value'] for item in response.data}
@@ -65,7 +64,7 @@ def update_user_xp(player_id, amount):
 def log_game_transaction(player_id, game, action, amount):
     threading.Thread(target=lambda: supabase.table("Game_Transactions").insert({"player_id": player_id, "game_type": game, "action_type": action, "amount": amount, "timestamp": datetime.now().isoformat()}).execute()).start()
 
-# --- 3. UI 初始化 (美工樣式核心) ---
+# --- 3. UI 初始化 (CSS 美工特效全開) ---
 def init_flagship_ui():
     m_spd = get_config('marquee_speed', "35")
     m_bg = get_config('welcome_bg_url', "https://img.freepik.com/free-photo/poker-table-dark-atmosphere_23-2151003784.jpg")
@@ -97,41 +96,60 @@ def init_flagship_ui():
             .stTabs [data-baseweb="tab-list"] {{ gap: 5px; background-color: #111; padding: 10px; border-radius: 15px; border: 1px solid #333; }}
             .stTabs [data-baseweb="tab"] {{ background-color: #222; color: #AAA; border-radius: 8px; border: none; }}
             .stTabs [aria-selected="true"] {{ background-color: #FFD700 !important; color: #000 !important; font-weight: bold; }}
+            
+            /* --- 卡片特效 --- */
             .welcome-wall {{ text-align: center; padding: 60px 20px; background: linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.9)), url('{m_bg}'); background-size: cover; border-radius: 20px; border: 2px solid #FFD700; margin-bottom: 20px; }}
-            .rank-card {{ background: linear-gradient(135deg, #1a1a1a 0%, #000 100%); border: 2px solid #FFD700; border-radius: 20px; padding: 25px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
-            .vip-card {{ background: linear-gradient(135deg, #000 0%, #222 100%); border: 2px solid #9B30FF; border-radius: 20px; padding: 25px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
+            .rank-card {{ background: linear-gradient(135deg, #1a1a1a 0%, #000 100%); border: 2px solid #FFD700; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(255, 215, 0, 0.15); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
+            .vip-card {{ background: linear-gradient(135deg, #000 0%, #222 100%); border: 2px solid #9B30FF; border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 0 20px rgba(155, 48, 255, 0.2); height: 100%; display: flex; flex-direction: column; justify-content: space-between; }}
+            .mall-card {{ background: #151515; border: 1px solid #333; border-radius: 12px; padding: 15px; text-align: center; height: 100%; display:flex; flex-direction:column; justify-content:space-between; }}
+            .mall-card:hover {{ border-color: #FFD700; transform: translateY(-5px); }}
+            .mall-price {{ color: #00FF00; font-weight: bold; font-size: 1.2em; }}
+            
+            /* --- 遊戲大廳特效 --- */
+            .lobby-card {{ background: linear-gradient(145deg, #222, #111); border: 1px solid #444; border-radius: 15px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
+            .lobby-card:hover {{ border-color: #FFD700; transform: scale(1.02); box-shadow: 0 0 15px rgba(255, 215, 0, 0.2); }}
+            .lobby-icon {{ font-size: 3em; margin-bottom: 10px; }}
+            
+            /* --- 榜單特效 --- */
+            .glory-title {{ color: #FFD700; font-size: 2.2em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 4px solid #FFD700; padding-bottom: 10px; text-shadow: 0 0 10px rgba(255,215,0,0.5); }}
             .lb-rank-card {{ padding: 15px; border-radius: 15px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 4px 10px rgba(0,0,0,0.5); border: 2px solid #FFF; }}
             .lb-rank-1 {{ background: linear-gradient(45deg, #FFD700, #FDB931); color: #000; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.02); }}
             .lb-rank-2 {{ background: linear-gradient(45deg, #E0E0E0, #B0B0B0); color: #000; box-shadow: 0 0 15px rgba(224,224,224,0.4); }}
             .lb-rank-3 {{ background: linear-gradient(45deg, #CD7F32, #A0522D); color: #FFF; box-shadow: 0 0 10px rgba(205,127,50,0.4); }}
             .lb-rank-norm {{ background: rgba(30,30,30,0.8); border: 1px solid #444; color: #EEE; }}
-            .lb-badge {{ font-size: 1.8em; margin-right: 15px; min-width: 40px; text-align: center; }}
-            .lb-info {{ display: flex; flex-direction: column; text-align: left; flex-grow: 1; }}
-            .lb-name {{ font-weight: 900; font-size: 1.2em; }}
-            .lb-score {{ font-weight: bold; font-size: 1.3em; text-align: right; }}
-            .marquee-container {{ background: #1a1a1a; color: #FFD700; padding: 12px 0; overflow: hidden; white-space: nowrap; border-top: 2px solid #FFD700; border-bottom: 2px solid #FFD700; margin-bottom: 25px; }}
-            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.5em; font-weight: bold; }}
-            @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
-            .mall-card {{ background: #151515; border: 1px solid #333; border-radius: 12px; padding: 15px; text-align: center; height: 100%; }}
-            .lobby-card {{ background: linear-gradient(145deg, #222, #111); border: 1px solid #444; border-radius: 15px; padding: 20px; text-align: center; cursor: pointer; transition: 0.2s; }}
-            .lobby-card:hover {{ border-color: #FFD700; transform: scale(1.02); }}
-            .lobby-icon {{ font-size: 3em; margin-bottom: 10px; }}
-            .bacc-zone {{ border: 2px solid; border-radius: 10px; padding: 10px; margin: 5px; min-height: 120px; background-color: rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:0.2s; }}
-            .bacc-player {{ border-color: #00BFFF; }} .bacc-banker {{ border-color: #FF4444; }}
+            
+            /* --- 遊戲內特效 --- */
+            .bj-table {{ background-color: #35654d; padding: 30px; border-radius: 20px; border: 8px solid #5c3a21; box-shadow: inset 0 0 50px rgba(0,0,0,0.8); text-align: center; margin-bottom: 20px; }}
+            .bj-card {{ background-color: #FFFFFF; color: #000000; border-radius: 6px; display: inline-block; width: 60px; height: 85px; margin: 5px; padding: 5px; font-family: 'Arial', sans-serif; font-weight: bold; font-size: 1.2em; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); vertical-align: middle; line-height: 1.1; }}
+            .suit-red {{ color: #D40000 !important; }}
+            .suit-black {{ color: #000000 !important; }}
+            
+            /* 轉盤 Grid */
+            .lm-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 20px; background: #000; border: 4px solid #FFD700; border-radius: 20px; }}
+            .lm-cell {{ background: #222; border: 2px solid #444; border-radius: 10px; padding: 10px; text-align: center; color: #FFF; transition: 0.1s; height: 100px; display: flex; flex-direction: column; justify-content: center; align-items: center; }}
+            .lm-active {{ background: #FFF; border-color: #FFD700; color: #000; box-shadow: 0 0 20px #FFD700; transform: scale(1.1); font-weight: bold; }}
+            .lm-img {{ width: 50px; height: 50px; object-fit: contain; margin-bottom: 5px; }}
+            
+            /* 百家樂 */
             .bacc-card {{ background-color: #FFF; color: #000; border-radius: 5px; width: 40px; height: 60px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1em; margin: 2px; }}
-            .bacc-card.red {{ color: #D40000; }} .bacc-card.black {{ color: #000000; }}
+            .bacc-zone {{ border: 2px solid; border-radius: 10px; padding: 10px; margin: 5px; min-height: 120px; background-color: rgba(0,0,0,0.3); display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; transition:0.2s; }}
+            .bacc-player {{ border-color: #00BFFF; }} .bacc-banker {{ border-color: #FF4444; }} .bacc-tie {{ border-color: #00FF00; }}
+            
+            /* 輪盤 */
             .roulette-history-bar {{ display: flex; gap: 5px; overflow-x: auto; padding: 10px; background: #000; border-radius: 8px; margin-bottom: 10px; border: 1px solid #333; }}
             .hist-ball {{ min-width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #fff; margin-right: 5px; }}
             .roulette-wheel-anim {{ width: 200px; height: 200px; border-radius: 50%; border: 10px dashed #FFD700; margin: 20px auto; animation: spin-ball 2s cubic-bezier(0.25, 0.1, 0.25, 1); background: radial-gradient(circle, #000 40%, #0d2b12 100%); display: flex; align-items: center; justify-content: center; font-size: 3em; color: #FFF; font-weight: bold; }}
             @keyframes spin-ball {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(3600deg); }} }}
+            
+            /* 跑馬燈 */
+            .marquee-container {{ background: #1a1a1a; color: #FFD700; padding: 12px 0; overflow: hidden; white-space: nowrap; border-top: 2px solid #FFD700; border-bottom: 2px solid #FFD700; margin-bottom: 25px; }}
+            .marquee-text {{ display: inline-block; padding-left: 100%; animation: marquee {m_spd}s linear infinite; font-size: 1.5em; font-weight: bold; }}
+            @keyframes marquee {{ 0% {{ transform: translate(0, 0); }} 100% {{ transform: translate(-100%, 0); }} }}
+            
             .mission-card {{ background: linear-gradient(90deg, #222 0%, #111 100%); border-left: 5px solid #FFD700; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }}
             .mission-title {{ font-size: 1.2em; font-weight: bold; color: #FFF; }}
             .mission-reward {{ color: #00FF00; font-weight: bold; border: 1px solid #00FF00; padding: 5px 10px; border-radius: 15px; }}
         </style>
-        <div class="welcome-wall">
-            <div style="font-size:3.5em; font-weight:900; color:#FFD700;">{m_title}</div>
-            <div style="font-size:1.5em; color:#EEE;">{m_subtitle}</div>
-        </div>
         <div class="marquee-container"><div class="marquee-text">{m_txt}</div></div>
     """, unsafe_allow_html=True)
     return lb_title_1, lb_title_2, ci_min, ci_max
@@ -323,7 +341,7 @@ lb_title_1, lb_title_2, ci_min, ci_max = init_flagship_ui()
 if not st.session_state.player_id: st.stop()
 
 # --- 5. 主程式 ---
-# [修復] 定義全域變數，防止 NameError
+# [修復] 定義全域變數
 user_role = st.session_state.access_level
 
 u_row = get_current_user_data(st.session_state.player_id)
@@ -412,17 +430,31 @@ with t_p[2]: # 遊戲大廳
     if 'current_game' not in st.session_state: st.session_state.current_game = 'lobby'
     
     if st.session_state.current_game == 'lobby':
+        # [修復] 使用 HTML 卡片樣式
         c1, c2, c3 = st.columns(3)
-        if c1.button("💣 掃雷", use_container_width=True): st.session_state.current_game = 'mines'; st.rerun()
-        if c2.button("🎡 轉盤", use_container_width=True): st.session_state.current_game = 'wheel'; st.rerun()
-        if c3.button("♠️ 21點", use_container_width=True): st.session_state.current_game = 'blackjack'; st.rerun()
+        with c1:
+            st.markdown('<div class="lobby-card"><div class="lobby-icon">💣</div><div class="lobby-title">撲洛掃雷</div></div>', unsafe_allow_html=True)
+            if st.button("進入 掃雷", use_container_width=True): st.session_state.current_game = 'mines'; st.rerun()
+        with c2:
+            st.markdown('<div class="lobby-card"><div class="lobby-icon">🎡</div><div class="lobby-title">撲洛幸運大轉盤</div></div>', unsafe_allow_html=True)
+            if st.button("進入 轉盤", use_container_width=True): st.session_state.current_game = 'wheel'; st.rerun()
+        with c3:
+            st.markdown('<div class="lobby-card"><div class="lobby-icon">♠️</div><div class="lobby-title">21點 Blackjack</div></div>', unsafe_allow_html=True)
+            if st.button("進入 21點", use_container_width=True): st.session_state.current_game = 'blackjack'; st.rerun()
+        
+        st.write("")
         c4, c5 = st.columns(2)
-        if c4.button("🏛️ 百家樂", use_container_width=True): st.session_state.current_game = 'baccarat'; st.rerun()
-        if c5.button("🔴 輪盤", use_container_width=True): st.session_state.current_game = 'roulette'; st.rerun()
+        with c4:
+            st.markdown('<div class="lobby-card"><div class="lobby-icon">🏛️</div><div class="lobby-title">皇家百家樂</div></div>', unsafe_allow_html=True)
+            if st.button("進入 百家樂", use_container_width=True): st.session_state.current_game = 'baccarat'; st.rerun()
+        with c5:
+            st.markdown('<div class="lobby-card"><div class="lobby-icon">🔴</div><div class="lobby-title">俄羅斯輪盤</div></div>', unsafe_allow_html=True)
+            if st.button("進入 輪盤", use_container_width=True): st.session_state.current_game = 'roulette'; st.rerun()
 
     else:
         if st.button("⬅️ 返回大廳"): st.session_state.current_game = 'lobby'; st.rerun()
 
+        # --- 掃雷 (修復美工與閃退) ---
         if st.session_state.current_game == 'mines':
             st.subheader("💣 撲洛掃雷")
             if 'mines_active' not in st.session_state: st.session_state.mines_active = False
@@ -430,15 +462,16 @@ with t_p[2]: # 遊戲大廳
                 st.session_state.mines_revealed = [False] * 25
                 st.session_state.mines_grid = [0] * 25
                 st.session_state.mines_active = False
+            if 'mines_game_over' not in st.session_state: st.session_state.mines_game_over = False
             
-            if not st.session_state.mines_active:
+            # [修復] 狀態邏輯：只有當「不活躍」且「不是遊戲結束」時才顯示開始設定
+            if not st.session_state.mines_active and not st.session_state.mines_game_over:
                 c1, c2 = st.columns(2)
                 bet = c1.number_input("投入 XP", 100, 10000, 100)
                 mines = c2.slider("地雷數", 1, 24, 3)
                 if st.button("🚀 開始"):
                     if u_row['xp'] >= bet:
                         update_user_xp(st.session_state.player_id, -bet)
-                        log_game_transaction(st.session_state.player_id, 'mines', 'BET', bet)
                         st.session_state.mines_active = True
                         st.session_state.mines_game_over = False
                         st.session_state.mines_bet = bet
@@ -447,7 +480,10 @@ with t_p[2]: # 遊戲大廳
                         random.shuffle(st.session_state.mines_grid)
                         st.rerun()
                     else: st.error("XP 不足")
+            
+            # 遊戲進行中或結束畫面
             else:
+                # 計算倍率
                 rev_count = sum(1 for i, r in enumerate(st.session_state.mines_revealed) if r and st.session_state.mines_grid[i] == 0)
                 mine_count = sum(st.session_state.mines_grid)
                 try: mult = 0.97 * (math.comb(25, rev_count) / math.comb(25 - mine_count, rev_count))
@@ -456,31 +492,51 @@ with t_p[2]: # 遊戲大廳
                 
                 c_info, c_cash = st.columns([3, 1])
                 c_info.info(f"倍率: {mult:.2f}x | 贏取: {cur_win}")
-                if c_cash.button("💰 結算領錢"):
-                    update_user_xp(st.session_state.player_id, cur_win)
-                    log_game_transaction(st.session_state.player_id, 'mines', 'WIN', cur_win)
-                    st.session_state.mines_active = False
-                    st.success(f"贏得 {cur_win} XP"); time.sleep(1); st.rerun()
+                
+                # 只有在「活躍中」才顯示結算按鈕
+                if st.session_state.mines_active:
+                    if c_cash.button("💰 結算領錢"):
+                        update_user_xp(st.session_state.player_id, cur_win)
+                        log_game_transaction(st.session_state.player_id, 'mines', 'WIN', cur_win)
+                        st.session_state.mines_active = False
+                        st.success(f"贏得 {cur_win} XP"); time.sleep(1); st.rerun()
 
                 cols = st.columns(5)
                 for i in range(25):
                     with cols[i%5]:
+                        # 已翻開
                         if st.session_state.mines_revealed[i]:
-                            if st.session_state.mines_grid[i] == 1: st.button("💥", key=f"m_{i}", disabled=True)
-                            else: st.button("💎", key=f"m_{i}", disabled=True)
+                            if st.session_state.mines_grid[i] == 1: 
+                                st.markdown("<div class='mine-btn mine-boom'>💥</div>", unsafe_allow_html=True)
+                            else: 
+                                st.markdown("<div class='mine-btn mine-safe'>💎</div>", unsafe_allow_html=True)
+                        
+                        # 遊戲結束後顯示所有地雷
+                        elif st.session_state.mines_game_over and st.session_state.mines_grid[i] == 1:
+                             st.markdown("<div class='mine-btn'>💣</div>", unsafe_allow_html=True)
+                        
+                        # 未翻開 (按鈕)
                         else:
-                            if st.button("❓", key=f"m_{i}"):
+                            # 如果遊戲結束，禁用按鈕
+                            disabled = st.session_state.mines_game_over
+                            if st.button("❓", key=f"m_{i}", disabled=disabled):
                                 st.session_state.mines_revealed[i] = True
                                 if st.session_state.mines_grid[i] == 1:
                                     st.session_state.mines_active = False
                                     st.session_state.mines_game_over = True
                                     st.error("爆炸了！")
                                 st.rerun()
-                if st.session_state.get('mines_game_over'):
-                    if st.button("再來一局"): st.rerun()
+                
+                # 遊戲結束後的重置按鈕
+                if st.session_state.mines_game_over:
+                    if st.button("🔄 再來一局"): 
+                        st.session_state.mines_game_over = False
+                        st.session_state.mines_active = False
+                        st.rerun()
 
+        # --- 轉盤 (修復名稱與美工) ---
         elif st.session_state.current_game == 'wheel':
-             st.subheader("🎡 撲洛幸運大轉盤 (小瑪莉)")
+             st.subheader("🎡 撲洛幸運大轉盤") # [修復] 移除 (小瑪莉)
              wheel_cost = int(get_config('min_bet_wheel', "100"))
              st.info(f"消耗: {wheel_cost} XP / 次")
              p_lvl = rank_to_level(player_rank_title)
@@ -494,6 +550,8 @@ with t_p[2]: # 遊戲大廳
                      if rank_to_level(item.get('wheel_min_rank', '無限制')) <= p_lvl: valid_items.append(item.to_dict())
              while len(valid_items) < 8: valid_items.append({"item_name": "銘謝惠顧", "item_value": 0, "img_url": "", "weight": 50})
              display_items = valid_items[:8]
+             
+             # [修復] 恢復 lm-grid 視覺
              grid_html = "<div class='lm-grid'>"
              for idx, item in enumerate(display_items):
                  active_cls = "lm-active" if st.session_state.get('lm_idx') == idx else ""
@@ -501,9 +559,9 @@ with t_p[2]: # 遊戲大廳
                  grid_html += f"<div class='lm-cell {active_cls}'>{img_tag}<div>{item['item_name']}</div></div>"
              grid_html += "</div>"
              wheel_placeholder = st.empty(); wheel_placeholder.markdown(grid_html, unsafe_allow_html=True)
+             
              if st.button("🚀 啟動"):
                  if u_row['xp'] >= wheel_cost:
-                     if not valid_items: st.error("獎池目前沒有適合您排位的獎品"); st.stop()
                      update_user_xp(st.session_state.player_id, -wheel_cost)
                      
                      weights = [float(i.get('weight', 10)) for i in display_items]
@@ -512,6 +570,7 @@ with t_p[2]: # 遊戲大廳
                      for _ in range(2): 
                          for i in range(len(display_items)):
                              st.session_state.lm_idx = i
+                             # 動畫刷新
                              temp_html = "<div class='lm-grid'>"
                              for dx, ditem in enumerate(display_items):
                                  ac = "lm-active" if i == dx else ""
@@ -520,6 +579,8 @@ with t_p[2]: # 遊戲大廳
                              temp_html += "</div>"
                              wheel_placeholder.markdown(temp_html, unsafe_allow_html=True); time.sleep(0.1)
                      st.session_state.lm_idx = win_idx
+                     
+                     # 最終定格
                      final_html = "<div class='lm-grid'>"
                      for dx, ditem in enumerate(display_items):
                          ac = "lm-active" if win_idx == dx else ""
@@ -527,6 +588,7 @@ with t_p[2]: # 遊戲大廳
                          final_html += f"<div class='lm-cell {ac}'>{it}<div>{ditem['item_name']}</div></div>"
                      final_html += "</div>"
                      wheel_placeholder.markdown(final_html, unsafe_allow_html=True)
+                     
                      if win_item['item_name'] != "銘謝惠顧":
                          cur_stock = supabase.table("Inventory").select("stock").eq("item_name", win_item['item_name']).execute().data[0]['stock']
                          supabase.table("Inventory").update({"stock": cur_stock - 1}).eq("item_name", win_item['item_name']).execute()
@@ -542,6 +604,7 @@ with t_p[2]: # 遊戲大廳
                      else: st.info("銘謝惠顧，下次好運！")
                  else: st.error("XP 不足")
         
+        # --- 21點 (修復美工) ---
         elif st.session_state.current_game == 'blackjack':
             st.subheader("♠️ 21點")
             if 'bj_active' not in st.session_state: st.session_state.bj_active = False
@@ -552,7 +615,6 @@ with t_p[2]: # 遊戲大廳
                 if st.button("🃏 發牌"):
                     if u_row['xp'] >= bet:
                         update_user_xp(st.session_state.player_id, -bet)
-                        
                         st.session_state.bj_active = True
                         st.session_state.bj_game_over = False
                         st.session_state.bj_bet = bet
@@ -578,6 +640,7 @@ with t_p[2]: # 遊戲大廳
                 p_val = hand_val(st.session_state.bj_p)
                 d_val = hand_val(st.session_state.bj_d) if st.session_state.bj_game_over else hand_val([st.session_state.bj_d[0]])
                 
+                # [修復] HTML 卡片渲染
                 def render_bj_card(c): return f"<div class='bj-card {'suit-red' if c[1] in ['♥','♦'] else 'suit-black'}'>{c[0]}<br>{c[1]}</div>"
                 
                 d_html = "".join([render_bj_card(c) for c in st.session_state.bj_d]) if st.session_state.bj_game_over else render_bj_card(st.session_state.bj_d[0]) + "<div class='bj-card'>?</div>"
@@ -896,12 +959,12 @@ with t_p[2]: # 遊戲大廳
                              st.session_state.roulette_bets[str(n)] = st.session_state.roulette_bets.get(str(n), 0) + st.session_state.roulette_chips
                 
                 sb1, sb2 = st.columns(2)
-                if sb1.button("🔴 紅色", key="rb_red"): st.session_state.roulette_bets["Red"] = st.session_state.roulette_bets.get("Red", 0) + st.session_state.roulette_chips
-                if sb2.button("⚫ 黑色", key="rb_black"): st.session_state.roulette_bets["Black"] = st.session_state.roulette_bets.get("Black", 0) + st.session_state.roulette_chips
+                if sb1.button("🔴 紅色", key="rb_red"): st.session_state.roulette_bets["紅色"] = st.session_state.roulette_bets.get("紅色", 0) + st.session_state.roulette_chips
+                if sb2.button("⚫ 黑色", key="rb_black"): st.session_state.roulette_bets["黑色"] = st.session_state.roulette_bets.get("黑色", 0) + st.session_state.roulette_chips
                 
                 sb3, sb4 = st.columns(2)
-                if sb3.button("單數", key="rb_odd"): st.session_state.roulette_bets["Odd"] = st.session_state.roulette_bets.get("Odd", 0) + st.session_state.roulette_chips
-                if sb4.button("雙數", key="rb_even"): st.session_state.roulette_bets["Even"] = st.session_state.roulette_bets.get("Even", 0) + st.session_state.roulette_chips
+                if sb3.button("單數", key="rb_odd"): st.session_state.roulette_bets["單數"] = st.session_state.roulette_bets.get("單數", 0) + st.session_state.roulette_chips
+                if sb4.button("雙數", key="rb_even"): st.session_state.roulette_bets["雙數"] = st.session_state.roulette_bets.get("雙數", 0) + st.session_state.roulette_chips
 
 with t_p[3]: # 商城
     st.subheader("🛒 商城")
@@ -987,11 +1050,10 @@ with t_p[4]: # 背包
         st.success("已刪除"); st.rerun()
 
 with t_p[5]: # 榜單
-    # [修復] 使用 st.columns(2) 雙榜並排
+    # [修復] 雙榜特效 (使用 st.markdown 和 div class)
     c_lb1, c_lb2 = st.columns(2)
     with c_lb1:
         st.markdown(f"<div class='glory-title'>{lb_title_1}</div>", unsafe_allow_html=True)
-        # 簡單查詢避免 join error
         lb_res = supabase.table("Leaderboard").select("player_id, hero_points").neq("player_id", "330999").order("hero_points", desc=True).limit(20).execute()
         
         if lb_res.data:
@@ -1001,7 +1063,6 @@ with t_p[5]: # 榜單
                 style_class = "lb-rank-1" if rank_num == 1 else ("lb-rank-2" if rank_num == 2 else ("lb-rank-3" if rank_num == 3 else "lb-rank-norm"))
                 curr_rank = get_rank_v2500(row['hero_points'])
                 
-                # 嘗試取得名字，若失敗則顯示 ID
                 p_name = row['player_id']
                 try:
                     mem_q = supabase.table("Members").select("name").eq("pf_id", row['player_id']).execute()
@@ -1041,7 +1102,6 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         st.subheader("🛂 櫃台核銷")
         target = st.text_input("玩家 ID")
         if target:
-            # 分開查詢以避免關聯錯誤
             pend_res = supabase.table("Prizes").select("id, prize_name").eq("player_id", target).eq("status", "待兌換").execute()
             prizes_data = pend_res.data
             
@@ -1076,24 +1136,20 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     st.error(f"❌ 此物品價值 ({selected_item['item_value']}) 超過權限，請聯繫老闆。")
                 else:
                     if st.button("確認核銷 (自動入帳)"):
-                        # VIP Logic
                         if selected_item['vip_hours'] > 0:
                             mem = supabase.table("Members").select("vip_level, vip_expiry").eq("pf_id", target).execute().data[0]
                             c_lvl = mem.get('vip_level', 0)
                             c_exp = mem.get('vip_expiry')
                             now = datetime.now(); start_time = now
-                            
                             if c_lvl == selected_item['vip_level'] and c_exp:
                                 try:
                                     exp_dt = datetime.strptime(str(c_exp).split('.')[0], "%Y-%m-%d %H:%M:%S")
                                     if exp_dt > now: start_time = exp_dt
                                 except: pass
-                            
                             new_exp = (start_time + timedelta(hours=int(selected_item['vip_hours']))).strftime("%Y-%m-%d %H:%M:%S")
                             supabase.table("Members").update({"vip_level": int(selected_item['vip_level']), "vip_expiry": new_exp}).eq("pf_id", target).execute()
                             st.toast(f"💎 VIP 權益已開通至 {new_exp}")
 
-                        # XP Card Logic
                         xp_match = re.search(r'(\d+)\s*XP', str(selected_item['prize_name']), re.IGNORECASE)
                         if xp_match:
                             add_xp = int(xp_match.group(1))
@@ -1273,10 +1329,8 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                         supabase.table("Members").update({"vip_points": supabase.table("Members").select("vip_points").eq("pf_id", t).execute().data[0]['vip_points'] + vp}).eq("pf_id", t).execute()
                     
                     if it != "無":
-                         # Deduct stock
                          cur_s = supabase.table("Inventory").select("stock").eq("item_name", it).execute().data[0]['stock']
                          supabase.table("Inventory").update({"stock": cur_s - 1}).eq("item_name", it).execute()
-                         # Add prize
                          supabase.table("Prizes").insert({
                              "player_id": t, "prize_name": it, "status": '待兌換', 
                              "time": datetime.now().isoformat(), "expire_at": "無期限", "source": '老闆空投'
@@ -1297,7 +1351,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
         up = st.file_uploader("上傳 CSV / Excel")
         if up and st.button("執行精算"):
             try:
-                fn = up.name; buy = 1000 # Default
+                fn = up.name; buy = 1000 
                 match = re.search(r'(\d+)', fn)
                 if match: buy = int(match.group(1))
                 
@@ -1314,7 +1368,6 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 if chk.data:
                     st.error(f"❌ 檔案 {fn} 已被匯入過！"); st.stop()
                 
-                # 簡單積分矩陣
                 base = 200 if buy >= 3000 else 100
                 mult = 1.5
                 
@@ -1337,22 +1390,18 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     # Calculate Points
                     pts = int(base + (base * (1/rank) * mult) + (base * re_e))
                     
-                    # [修復] 雙榜同步更新
                     try:
-                        # 總榜
                         cur_h = supabase.table("Leaderboard").select("hero_points").eq("player_id", pid).execute().data[0]['hero_points']
                         supabase.table("Leaderboard").update({"hero_points": cur_h + pts}).eq("player_id", pid).execute()
                     except:
                         supabase.table("Leaderboard").insert({"player_id": pid, "hero_points": pts}).execute()
                         
                     try:
-                        # 月榜
                         cur_m = supabase.table("Monthly_God").select("monthly_points").eq("player_id", pid).execute().data[0]['monthly_points']
                         supabase.table("Monthly_God").update({"monthly_points": cur_m + pts}).eq("player_id", pid).execute()
                     except:
                         supabase.table("Monthly_God").insert({"player_id": pid, "monthly_points": pts}).execute()
                     
-                    # Log
                     supabase.table("Tournament_Records").insert({
                         "player_id": pid, "buy_in": buy, "rank": rank, "re_entries": re_e, "payout": payout, "filename": fn,
                         "actual_fee": actual_fee,
@@ -1365,7 +1414,6 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             except Exception as e: st.error(f"匯入失敗: {e}")
 
     with tabs[3]: # 系統設定
-        # [修復] 恢復各遊戲後台參數設定
         if user_role == "老闆":
             st.subheader("⚙️ 遊戲參數設定")
             c1, c2, c3 = st.columns(3)
@@ -1390,7 +1438,7 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
             rp = c4.number_input("白金分數", value=int(get_config('rank_limit_platinum', 80)))
             
             # [修復] 卡片說明設定
-            rank_desc = st.text_area("排位卡背面說明", value=get_config('rank_card_desc', '排位說明...'))
+            rank_desc = st.text_area("排位卡背面說明", value=get_config('rank_card_desc', '排位與積分規則說明...'))
             vip_desc = st.text_area("VIP 卡背面說明", value=get_config('vip_card_desc', 'VIP 權益說明...'))
             
             if st.button("保存排位與卡片設定"):
@@ -1403,7 +1451,6 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 st.success("設定已更新")
 
         st.write("---")
-        # [修復] 恢復任務新增功能
         st.subheader("📜 任務管理")
         with st.expander("➕ 新增任務", expanded=False):
             with st.form("add_m_form"):
@@ -1414,7 +1461,6 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                 cr = st.selectbox("條件", ["daily_checkin", "consecutive_checkin", "daily_win"])
                 val = st.number_input("目標值", 1)
                 
-                # 讀取物品清單
                 inv_items = ["無"]
                 try: 
                     inv = supabase.table("Inventory").select("item_name").execute().data
@@ -1430,12 +1476,10 @@ if st.session_state.access_level in ["老闆", "店長", "員工"]:
                     }).execute()
                     st.success("任務已新增")
 
-        # [新增] 老闆一鍵重置
         if user_role == "老闆":
             st.write("---")
             st.markdown("### 🧨 危險區域")
             if st.button("🔥 刪除所有玩家數據 (保留老闆)", type="primary"):
-                # 依序刪除關聯資料，最後刪除 Members (保留老闆)
                 supabase.table("Prizes").delete().neq("player_id", "330999").execute()
                 supabase.table("Game_Transactions").delete().neq("player_id", "330999").execute()
                 supabase.table("Leaderboard").delete().neq("player_id", "330999").execute()
